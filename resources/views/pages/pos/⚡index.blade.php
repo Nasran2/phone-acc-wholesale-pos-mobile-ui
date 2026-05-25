@@ -1365,14 +1365,14 @@ new #[Title('POS Terminal')] class extends Component
         x-transition:leave-end="opacity-0"
     >
         <div
-            class="flex max-h-[calc(100vh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100vh-3rem)] lg:max-w-xl"
+            class="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[90vh] lg:max-w-xl"
             @click.away="checkoutOpen = false"
             x-transition:enter="ease-out duration-300 transform"
-            x-transition:enter-start="translate-y-6 scale-95 opacity-0"
-            x-transition:enter-end="translate-y-0 scale-100 opacity-100"
+            x-transition:enter-start="translate-y-6 scale-95"
+            x-transition:enter-end="translate-y-0 scale-100"
             x-transition:leave="ease-in duration-200 transform"
-            x-transition:leave-start="translate-y-0 scale-100 opacity-100"
-            x-transition:leave-end="translate-y-6 scale-95 opacity-0"
+            x-transition:leave-start="translate-y-0 scale-100"
+            x-transition:leave-end="translate-y-6 scale-95"
         >
             <div class="flex items-center justify-between border-b border-zinc-100 p-5 bg-zinc-50/50">
                 <h3 class="font-display font-bold text-zinc-950">{{ __('Checkout Terminal') }}</h3>
@@ -1504,11 +1504,11 @@ new #[Title('POS Terminal')] class extends Component
         <div
             class="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 text-center flex flex-col items-center gap-4"
             x-transition:enter="ease-out duration-300 transform scale-90"
-            x-transition:enter-start="opacity-0 scale-90"
-            x-transition:enter-end="opacity-100 scale-100"
+            x-transition:enter-start="scale-90"
+            x-transition:enter-end="scale-100"
             x-transition:leave="ease-in duration-200 transform scale-100"
-            x-transition:leave-start="opacity-100 scale-100"
-            x-transition:leave-end="opacity-0 scale-90"
+            x-transition:leave-start="scale-100"
+            x-transition:leave-end="scale-90"
         >
             <!-- Animated Green Success Checkmark -->
             <div class="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 border-2 border-emerald-400 animate-bounce">
