@@ -1365,7 +1365,7 @@ new #[Title('POS Terminal')] class extends Component
         x-transition:leave-end="opacity-0"
     >
         <div
-            class="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[90vh] lg:max-w-xl"
+            class="flex max-h-[95%] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[90vh] lg:max-w-xl"
             @click.away="checkoutOpen = false"
             x-transition:enter="ease-out duration-300 transform"
             x-transition:enter-start="translate-y-6 scale-95"
