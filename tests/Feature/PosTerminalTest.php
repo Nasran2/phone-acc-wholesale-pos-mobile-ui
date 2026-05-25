@@ -80,6 +80,8 @@ test('cashier can edit cart item quantity price and discount', function () {
         ->call('openCartItemEditor', 0)
         ->assertSet('cartItemEditorOpen', true)
         ->assertSet('editCartName', 'AirPods Pro Clear Case')
+        ->assertSet('editUnitPrice', 1500.00)
+        ->assertSee('unit: Number($wire.editUnitPrice) || 0', false)
         ->set('editQuantity', 2)
         ->set('editUnitPrice', 1200)
         ->set('editDiscountType', 'percentage')

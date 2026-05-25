@@ -1351,15 +1351,15 @@ new #[Title('POS Terminal')] class extends Component
     >
         <form
             x-data="{
-                qty: @js($editQuantity),
-                unit: @js((float) $editUnitPrice),
-                discountType: @js($editDiscountType),
-                discountValue: @js((float) $editDiscountValue),
+                qty: Number($wire.editQuantity) || 1,
+                unit: Number($wire.editUnitPrice) || 0,
+                discountType: $wire.editDiscountType || 'fixed',
+                discountValue: Number($wire.editDiscountValue) || 0,
                 syncFromServer() {
-                    this.qty = Number(@js($editQuantity)) || 1;
-                    this.unit = Number(@js((float) $editUnitPrice)) || 0;
-                    this.discountType = @js($editDiscountType) || 'fixed';
-                    this.discountValue = Number(@js((float) $editDiscountValue)) || 0;
+                    this.qty = Number($wire.editQuantity) || 1;
+                    this.unit = Number($wire.editUnitPrice) || 0;
+                    this.discountType = $wire.editDiscountType || 'fixed';
+                    this.discountValue = Number($wire.editDiscountValue) || 0;
                 },
                 get gross() {
                     return Math.max(1, Number(this.qty) || 1) * Math.max(0, Number(this.unit) || 0);
