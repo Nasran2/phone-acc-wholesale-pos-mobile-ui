@@ -11,11 +11,19 @@
     $today = Carbon::today();
     $yesterday = Carbon::yesterday();
 
-    $todaySalesSum = (float) Sale::query()->whereDate('date', $today)->sum('grand_total');
+    $todaySales = Sale::query()
+        ->whereDate('date', $today)
+        ->selectRaw('COALESCE(SUM(grand_total), 0) as total_sales')
+        ->selectRaw('COALESCE(SUM(paid_amount), 0) as total_paid')
+        ->selectRaw('COALESCE(SUM(due_amount), 0) as total_due')
+        ->selectRaw('COUNT(*) as invoices_count')
+        ->first();
+
+    $todaySalesSum = (float) $todaySales->total_sales;
     $yesterdaySalesSum = (float) Sale::query()->whereDate('date', $yesterday)->sum('grand_total');
-    $todaySalesCount = Sale::query()->whereDate('date', $today)->count();
-    $paidToday = (float) Sale::query()->whereDate('date', $today)->sum('paid_amount');
-    $dueToday = (float) Sale::query()->whereDate('date', $today)->sum('due_amount');
+    $todaySalesCount = (int) $todaySales->invoices_count;
+    $paidToday = (float) $todaySales->total_paid;
+    $dueToday = (float) $todaySales->total_due;
 
     $todayCogs = (float) SaleItem::query()
         ->whereHas('sale', fn ($query) => $query->whereDate('date', $today))
@@ -99,7 +107,7 @@
 
 <x-layouts::app :title="__('Dashboard')">
     <div class="flex flex-col gap-4 sm:gap-6">
-        <section class="relative overflow-hidden rounded-3xl border border-white/70 bg-white px-4 py-5 shadow-[0_20px_70px_rgba(15,23,42,0.08)] sm:px-6 lg:px-8 dark:border-zinc-800/80 dark:bg-zinc-900">
+        <section class="relative hidden overflow-hidden rounded-3xl border border-white/70 bg-white px-4 py-5 shadow-[0_20px_70px_rgba(15,23,42,0.08)] sm:block sm:px-6 lg:px-8 dark:border-zinc-800/80 dark:bg-zinc-900">
             <div class="absolute inset-0 bg-[linear-gradient(115deg,rgba(124,58,237,0.18),rgba(6,182,212,0.12),rgba(16,185,129,0.10))] dark:bg-[linear-gradient(115deg,rgba(124,58,237,0.22),rgba(6,182,212,0.14),rgba(16,185,129,0.10))]"></div>
 
             <div class="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
@@ -129,59 +137,59 @@
             </div>
         </section>
 
-        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <div class="rounded-3xl border border-white/70 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900">
+        <section class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
+            <div class="rounded-2xl border border-white/70 bg-white p-3 shadow-[0_18px_45px_rgba(15,23,42,0.06)] sm:rounded-3xl sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-100 text-violet-600 dark:bg-violet-950/50 dark:text-violet-300">
-                        <flux:icon.currency-dollar class="size-5" />
+                    <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-violet-100 text-violet-600 sm:h-11 sm:w-11 dark:bg-violet-950/50 dark:text-violet-300">
+                        <flux:icon.currency-dollar class="size-4 sm:size-5" />
                     </div>
                     <span @class([
-                        'rounded-full px-2.5 py-1 text-[11px] font-black',
+                        'rounded-full px-2 py-1 text-[10px] font-black sm:px-2.5 sm:text-[11px]',
                         'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300' => $salesChange >= 0,
                         'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-300' => $salesChange < 0,
                     ])>
                         {{ $salesChange >= 0 ? '+' : '' }}{{ number_format($salesChange, 1) }}%
                     </span>
                 </div>
-                <p class="mt-5 text-xs font-bold uppercase tracking-wider text-zinc-400">{{ __('Today sales') }}</p>
-                <p class="mt-1 font-display text-2xl font-bold text-zinc-950 dark:text-white">Rs {{ number_format($todaySalesSum, 2) }}</p>
-                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{{ trans_choice('{0} No invoices today|{1} :count invoice today|[2,*] :count invoices today', $todaySalesCount, ['count' => $todaySalesCount]) }}</p>
+                <p class="mt-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:mt-5 sm:text-xs">{{ __('Today sales') }}</p>
+                <p class="mt-1 font-display text-[1.05rem] font-bold leading-tight text-zinc-950 sm:text-2xl dark:text-white">Rs {{ number_format($todaySalesSum, 2) }}</p>
+                <p class="mt-1 line-clamp-2 text-[11px] text-zinc-500 sm:mt-2 sm:text-xs dark:text-zinc-400">{{ trans_choice('{0} No invoices today|{1} :count invoice today|[2,*] :count invoices today', $todaySalesCount, ['count' => $todaySalesCount]) }}</p>
             </div>
 
-            <div class="rounded-3xl border border-white/70 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900">
+            <div class="rounded-2xl border border-white/70 bg-white p-3 shadow-[0_18px_45px_rgba(15,23,42,0.06)] sm:rounded-3xl sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-300">
-                        <flux:icon.arrow-trending-up class="size-5" />
+                    <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600 sm:h-11 sm:w-11 dark:bg-emerald-950/50 dark:text-emerald-300">
+                        <flux:icon.arrow-trending-up class="size-4 sm:size-5" />
                     </div>
-                    <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300">{{ $profitRatio }}%</span>
+                    <span class="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-600 sm:px-2.5 sm:text-[11px] dark:bg-emerald-950/40 dark:text-emerald-300">{{ $profitRatio }}%</span>
                 </div>
-                <p class="mt-5 text-xs font-bold uppercase tracking-wider text-zinc-400">{{ __('Today profit') }}</p>
-                <p class="mt-1 font-display text-2xl font-bold text-zinc-950 dark:text-white">Rs {{ number_format($todayProfit, 2) }}</p>
-                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{{ __('After cost and daily expenses.') }}</p>
+                <p class="mt-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:mt-5 sm:text-xs">{{ __('Today profit') }}</p>
+                <p class="mt-1 font-display text-[1.05rem] font-bold leading-tight text-zinc-950 sm:text-2xl dark:text-white">Rs {{ number_format($todayProfit, 2) }}</p>
+                <p class="mt-1 line-clamp-2 text-[11px] text-zinc-500 sm:mt-2 sm:text-xs dark:text-zinc-400">{{ __('After cost and daily expenses.') }}</p>
             </div>
 
-            <div class="rounded-3xl border border-white/70 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900">
+            <div class="rounded-2xl border border-white/70 bg-white p-3 shadow-[0_18px_45px_rgba(15,23,42,0.06)] sm:rounded-3xl sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-600 dark:bg-cyan-950/50 dark:text-cyan-300">
-                        <flux:icon.banknotes class="size-5" />
+                    <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-cyan-100 text-cyan-600 sm:h-11 sm:w-11 dark:bg-cyan-950/50 dark:text-cyan-300">
+                        <flux:icon.banknotes class="size-4 sm:size-5" />
                     </div>
-                    <span class="rounded-full bg-cyan-50 px-2.5 py-1 text-[11px] font-black text-cyan-600 dark:bg-cyan-950/40 dark:text-cyan-300">{{ __('Cash') }}</span>
+                    <span class="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-black text-cyan-600 sm:px-2.5 sm:text-[11px] dark:bg-cyan-950/40 dark:text-cyan-300">{{ __('Cash') }}</span>
                 </div>
-                <p class="mt-5 text-xs font-bold uppercase tracking-wider text-zinc-400">{{ __('Drawer balance') }}</p>
-                <p class="mt-1 font-display text-2xl font-bold text-zinc-950 dark:text-white">Rs {{ number_format($cashBalance, 2) }}</p>
-                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{{ __('Physical shop cash position.') }}</p>
+                <p class="mt-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:mt-5 sm:text-xs">{{ __('Drawer balance') }}</p>
+                <p class="mt-1 font-display text-[1.05rem] font-bold leading-tight text-zinc-950 sm:text-2xl dark:text-white">Rs {{ number_format($cashBalance, 2) }}</p>
+                <p class="mt-1 line-clamp-2 text-[11px] text-zinc-500 sm:mt-2 sm:text-xs dark:text-zinc-400">{{ __('Physical shop cash position.') }}</p>
             </div>
 
-            <div class="rounded-3xl border border-white/70 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-zinc-800 dark:bg-zinc-900">
+            <div class="rounded-2xl border border-white/70 bg-white p-3 shadow-[0_18px_45px_rgba(15,23,42,0.06)] sm:rounded-3xl sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
                 <div class="flex items-center justify-between gap-3">
-                    <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-100 text-amber-600 dark:bg-amber-950/50 dark:text-amber-300">
-                        <flux:icon.exclamation-triangle class="size-5" />
+                    <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-amber-100 text-amber-600 sm:h-11 sm:w-11 dark:bg-amber-950/50 dark:text-amber-300">
+                        <flux:icon.exclamation-triangle class="size-4 sm:size-5" />
                     </div>
-                    <span class="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-600 dark:bg-amber-950/40 dark:text-amber-300">{{ $stockPressure }}%</span>
+                    <span class="rounded-full bg-amber-50 px-2 py-1 text-[10px] font-black text-amber-600 sm:px-2.5 sm:text-[11px] dark:bg-amber-950/40 dark:text-amber-300">{{ $stockPressure }}%</span>
                 </div>
-                <p class="mt-5 text-xs font-bold uppercase tracking-wider text-zinc-400">{{ __('Low stock') }}</p>
-                <p class="mt-1 font-display text-2xl font-bold text-zinc-950 dark:text-white">{{ $lowStockCount }}</p>
-                <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{{ __('Items need replenishment.') }}</p>
+                <p class="mt-3 text-[10px] font-bold uppercase tracking-wider text-zinc-400 sm:mt-5 sm:text-xs">{{ __('Low stock') }}</p>
+                <p class="mt-1 font-display text-[1.05rem] font-bold leading-tight text-zinc-950 sm:text-2xl dark:text-white">{{ $lowStockCount }}</p>
+                <p class="mt-1 line-clamp-2 text-[11px] text-zinc-500 sm:mt-2 sm:text-xs dark:text-zinc-400">{{ __('Items need replenishment.') }}</p>
             </div>
         </section>
 

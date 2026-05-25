@@ -548,36 +548,36 @@ new #[Title('Manage Customers')] class extends Component
         </div>
     </div>
 
-    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <div class="app-card p-4">
+    <section class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-3">
+        <div class="app-card p-3 sm:p-4">
             <div class="flex items-center justify-between">
-                <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-                    <flux:icon.user-group class="size-5" />
+                <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-violet-50 text-violet-600 sm:h-10 sm:w-10">
+                    <flux:icon.user-group class="size-4 sm:size-5" />
                 </div>
                 <flux:badge size="sm" color="zinc">{{ __('Customers') }}</flux:badge>
             </div>
-            <p class="mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-400">{{ __('Total Profiles') }}</p>
-            <p class="mt-1 font-display text-xl font-bold text-zinc-950">{{ number_format($this->totalCustomers) }}</p>
+            <p class="mt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 sm:mt-4 sm:text-xs">{{ __('Total Profiles') }}</p>
+            <p class="mt-1 font-display text-lg font-bold leading-tight text-zinc-950 sm:text-xl">{{ number_format($this->totalCustomers) }}</p>
         </div>
-        <div class="app-card p-4">
+        <div class="app-card p-3 sm:p-4">
             <div class="flex items-center justify-between">
-                <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
-                    <flux:icon.exclamation-triangle class="size-5" />
+                <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-rose-50 text-rose-600 sm:h-10 sm:w-10">
+                    <flux:icon.exclamation-triangle class="size-4 sm:size-5" />
                 </div>
                 <flux:badge size="sm" color="rose">{{ __('Due') }}</flux:badge>
             </div>
-            <p class="mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-400">{{ __('Outstanding Receivables') }}</p>
-            <p class="mt-1 font-display text-xl font-bold text-zinc-950">Rs {{ number_format($this->totalDueBalance, 2) }}</p>
+            <p class="mt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 sm:mt-4 sm:text-xs">{{ __('Outstanding Receivables') }}</p>
+            <p class="mt-1 font-display text-lg font-bold leading-tight text-zinc-950 sm:text-xl">Rs {{ number_format($this->totalDueBalance, 2) }}</p>
         </div>
-        <div class="app-card p-4">
+        <div class="app-card p-3 sm:p-4">
             <div class="flex items-center justify-between">
-                <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-                    <flux:icon.banknotes class="size-5" />
+                <div class="flex h-9 w-9 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 sm:h-10 sm:w-10">
+                    <flux:icon.banknotes class="size-4 sm:size-5" />
                 </div>
                 <flux:badge size="sm" color="emerald">{{ __('Active') }}</flux:badge>
             </div>
-            <p class="mt-4 text-xs font-semibold uppercase tracking-wider text-zinc-400">{{ __('Customers With Dues') }}</p>
-            <p class="mt-1 font-display text-xl font-bold text-zinc-950">{{ number_format($this->customersWithDue) }}</p>
+            <p class="mt-3 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 sm:mt-4 sm:text-xs">{{ __('Customers With Dues') }}</p>
+            <p class="mt-1 font-display text-lg font-bold leading-tight text-zinc-950 sm:text-xl">{{ number_format($this->customersWithDue) }}</p>
         </div>
     </section>
 
@@ -631,7 +631,7 @@ new #[Title('Manage Customers')] class extends Component
                 <div class="flex items-center gap-3">
                     <flux:icon.magnifying-glass class="size-4 text-zinc-400" />
                     <input
-                        wire:model.live.debounce.300ms="search"
+                        wire:model.live.debounce.500ms="search"
                         type="text"
                         placeholder="Search customers by name or phone..."
                         class="w-full bg-transparent text-sm text-zinc-950 focus:outline-none"
