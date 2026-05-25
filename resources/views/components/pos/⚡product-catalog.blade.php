@@ -3,6 +3,7 @@
 use App\Models\Category;
 use App\Models\Product;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Component;
 
 new class extends Component
@@ -13,14 +14,21 @@ new class extends Component
 
     public string $selectedModel = '';
 
+    /**
+     * @return array<int, array{id: int, name: string}>
+     */
     #[Livewire\Attributes\Computed]
-    public function categories(): Collection
+    public function categories(): array
     {
-        return Category::query()
-            ->select(['id', 'name'])
+        return $this->rememberFilterData('pos-categories-v1', fn () => Category::query()
             ->where('is_active', true)
             ->orderBy('name')
-            ->get();
+            ->get(['id', 'name'])
+            ->map(fn (Category $category): array => [
+                'id' => $category->id,
+                'name' => $category->name,
+            ])
+            ->all());
     }
 
     /**
@@ -29,7 +37,7 @@ new class extends Component
     #[Livewire\Attributes\Computed]
     public function compatibleModels(): array
     {
-        return Product::query()
+        return $this->rememberFilterData('pos-compatible-models-v1', fn () => Product::query()
             ->where('is_active', true)
             ->whereNotNull('compatible_models')
             ->select('compatible_models')
@@ -38,7 +46,7 @@ new class extends Component
             ->pluck('compatible_models')
             ->filter()
             ->values()
-            ->all();
+            ->all());
     }
 
     #[Livewire\Attributes\Computed]
@@ -80,6 +88,21 @@ new class extends Component
             ->orderBy('name')
             ->get();
     }
+
+    /**
+     * @template TValue
+     *
+     * @param  \Closure(): TValue  $callback
+     * @return TValue
+     */
+    private function rememberFilterData(string $key, \Closure $callback): mixed
+    {
+        if (app()->environment('testing')) {
+            return $callback();
+        }
+
+        return Cache::remember($key, now()->addMinutes(10), $callback);
+    }
 };
 ?>
 
@@ -119,11 +142,11 @@ new class extends Component
             <button
                 type="button"
                 class="snap-start whitespace-nowrap rounded-2xl px-4 py-2.5 text-xs font-black shadow-sm transition"
-                :class="@js($selectedCategory) === @js((string) $cat->id) ? 'bg-zinc-950 text-white shadow-[0_12px_28px_rgba(15,23,42,0.20)]' : 'bg-white text-zinc-600 border border-zinc-200 hover:border-violet-200'"
-                wire:click="$set('selectedCategory', @js((string) $cat->id))"
-                wire:key="pos-category-{{ $cat->id }}"
+                :class="@js($selectedCategory) === @js((string) $cat['id']) ? 'bg-zinc-950 text-white shadow-[0_12px_28px_rgba(15,23,42,0.20)]' : 'bg-white text-zinc-600 border border-zinc-200 hover:border-violet-200'"
+                wire:click="$set('selectedCategory', @js((string) $cat['id']))"
+                wire:key="pos-category-{{ $cat['id'] }}"
             >
-                {{ $cat->name }}
+                {{ $cat['name'] }}
             </button>
         @endforeach
     </div>
@@ -134,6 +157,7 @@ new class extends Component
                 <div
                     class="group relative flex min-h-[9.25rem] cursor-pointer select-none flex-col justify-between overflow-hidden rounded-[1.25rem] border border-zinc-200 bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.05)] transition data-loading:pointer-events-none data-loading:opacity-70 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-[0_24px_60px_rgba(124,58,237,0.12)] sm:min-h-44 sm:rounded-[1.75rem] sm:p-4 sm:shadow-[0_18px_45px_rgba(15,23,42,0.06)]"
                     wire:click="$parent.addToCart({{ $p->id }})"
+                    wire:island="cart"
                     wire:key="product-pos-{{ $p->id }}"
                 >
                     @if ($p->stock_quantity <= 0)

@@ -40,6 +40,7 @@ new #[Title('POS Terminal')] class extends Component
     public string $quickCustomerPhone = '';
     public string $quickCustomerEmail = '';
     public string $quickCustomerAddress = '';
+    public bool $allowNegativeStock = false;
 
     // Modals & overlay control
     public bool $checkoutOpen = false;
@@ -83,12 +84,29 @@ new #[Title('POS Terminal')] class extends Component
         $this->cart[$index]['subtotal'] = $this->calculateCartItemSubtotal($this->cart[$index]);
     }
 
+    private function findSellableProduct(int $productId): Product
+    {
+        return Product::query()
+            ->select([
+                'id',
+                'name',
+                'sku',
+                'cost_price',
+                'selling_price',
+                'wholesale_price',
+                'stock_quantity',
+            ])
+            ->findOrFail($productId);
+    }
+
     public function mount(?Sale $sale = null): void
     {
         // Require authorization
         if (! auth()->user()->hasPermission('access_pos')) {
             abort(403, 'Unauthorized terminal access.');
         }
+
+        $this->allowNegativeStock = Setting::get('pos_allow_negative_stock', '0') !== '0';
 
         if ($sale && $sale->exists) {
             $this->editingSale = $sale;
@@ -148,6 +166,7 @@ new #[Title('POS Terminal')] class extends Component
         }
 
         $product = Product::query()
+            ->select('id')
             ->where('barcode', $this->barcodeInput)
             ->orWhere('sku', $this->barcodeInput)
             ->first();
@@ -164,9 +183,9 @@ new #[Title('POS Terminal')] class extends Component
 
     public function addToCart(int $productId): void
     {
-        $product = Product::query()->findOrFail($productId);
+        $product = $this->findSellableProduct($productId);
 
-        if ($product->stock_quantity <= 0 && Setting::get('pos_allow_negative_stock', '0') === '0') {
+        if ($product->stock_quantity <= 0 && ! $this->allowNegativeStock) {
             Flux::toast(variant: 'danger', text: __('Out of stock! Negative stock sales disabled.'));
             return;
         }
@@ -175,7 +194,7 @@ new #[Title('POS Terminal')] class extends Component
         foreach ($this->cart as $index => $item) {
             if ($item['product_id'] === $product->id) {
                 // Check stock bounds
-                if ($item['quantity'] + 1 > $product->stock_quantity && Setting::get('pos_allow_negative_stock', '0') === '0') {
+                if ($item['quantity'] + 1 > $product->stock_quantity && ! $this->allowNegativeStock) {
                     Flux::toast(variant: 'danger', text: __('Cannot exceed warehouse stock limits.'));
                     return;
                 }
@@ -210,10 +229,10 @@ new #[Title('POS Terminal')] class extends Component
     public function updateCartQty(int $index, int $qty): void
     {
         if (isset($this->cart[$index])) {
-            $product = Product::query()->findOrFail($this->cart[$index]['product_id']);
             $newQty = max(1, $qty);
+            $stockQuantity = (int) ($this->cart[$index]['stock'] ?? 0);
 
-            if ($newQty > $product->stock_quantity && Setting::get('pos_allow_negative_stock', '0') === '0') {
+            if ($newQty > $stockQuantity && ! $this->allowNegativeStock) {
                 Flux::toast(variant: 'danger', text: __('Cannot exceed warehouse stock limits.'));
                 return;
             }
@@ -281,9 +300,9 @@ new #[Title('POS Terminal')] class extends Component
             return;
         }
 
-        $product = Product::query()->findOrFail($this->cart[$index]['product_id']);
+        $stockQuantity = (int) ($this->cart[$index]['stock'] ?? 0);
 
-        if ($this->editQuantity > $product->stock_quantity && Setting::get('pos_allow_negative_stock', '0') === '0') {
+        if ($this->editQuantity > $stockQuantity && ! $this->allowNegativeStock) {
             Flux::toast(variant: 'danger', text: __('Cannot exceed warehouse stock limits.'));
             return;
         }
@@ -935,10 +954,12 @@ new #[Title('POS Terminal')] class extends Component
                     <flux:icon.plus class="size-4 text-emerald-500" />
                     {{ __('Product') }}
                 </a>
-                <button type="button" @click="mobCartOpen = true" class="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-3 py-2 text-xs font-black text-white shadow-[0_14px_30px_rgba(15,23,42,0.22)] transition active:scale-95">
-                    <flux:icon.shopping-cart class="size-4" />
-                    {{ count($cart) }}
-                </button>
+                @island(name: 'cart')
+                    <button type="button" @click="mobCartOpen = true" class="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-3 py-2 text-xs font-black text-white shadow-[0_14px_30px_rgba(15,23,42,0.22)] transition active:scale-95">
+                        <flux:icon.shopping-cart class="size-4" />
+                        {{ count($cart) }}
+                    </button>
+                @endisland
             </div>
         </div>
     </header>
@@ -975,6 +996,7 @@ new #[Title('POS Terminal')] class extends Component
             <livewire:pos.product-catalog />
         </div>
 
+        @island(name: 'cart')
         <!-- 2. Right Column: Desktop Cart Panel (Hidden on Mobile) -->
         <div class="hidden min-h-0 min-w-0 flex-col rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_22px_70px_rgba(15,23,42,0.10)] lg:flex lg:max-h-[calc(100vh-14rem)]">
             <div class="flex items-center justify-between border-b border-zinc-100 pb-4">
@@ -1055,9 +1077,11 @@ new #[Title('POS Terminal')] class extends Component
                 </div>
             </div>
         </div>
+        @endisland
     </div>
 
     <!-- 3. MOBILE FLOATING CART BUTTON CHIP (Only on mobile when cart > 0) -->
+    @island(name: 'cart')
     @if (count($cart) > 0)
         <div class="fixed bottom-16 right-4 z-40 lg:hidden">
             <button
@@ -1199,6 +1223,7 @@ new #[Title('POS Terminal')] class extends Component
             </div>
         </div>
     </div>
+    @endisland
 
     <!-- 5. QUICK CUSTOMER CREATE POPUP -->
     <div
