@@ -333,6 +333,16 @@ new #[Title('POS Terminal')] class extends Component
         $this->closeCartItemEditor();
     }
 
+    public function saveCartItemEditorFromPayload(int $quantity, float $unitPrice, string $discountType, float $discountValue): void
+    {
+        $this->editQuantity = max(1, $quantity);
+        $this->editUnitPrice = max(0, $unitPrice);
+        $this->editDiscountType = $discountType === 'percentage' ? 'percentage' : 'fixed';
+        $this->editDiscountValue = max(0, $discountValue);
+
+        $this->saveCartItemEditor();
+    }
+
     public function openQuickCustomerModal(): void
     {
         $this->quickCustomerName = $this->customerSearch;
@@ -753,6 +763,45 @@ new #[Title('POS Terminal')] class extends Component
                 this.sharePdfUrl = null;
             }
         },
+        isAndroidApp() {
+            return typeof window.ImranAndroid !== 'undefined';
+        },
+        money(value) {
+            const amount = Number.parseFloat(value || 0);
+            return amount.toLocaleString('en-US', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            });
+        },
+        printBill() {
+            if (this.isAndroidApp() && typeof window.ImranAndroid.printPage === 'function') {
+                window.ImranAndroid.printPage();
+                return;
+            }
+
+            window.print();
+        },
+        async blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        },
+        async sharePdfWithAndroid() {
+            if (!this.sharePdfFile) {
+                return false;
+            }
+
+            if (!this.isAndroidApp() || typeof window.ImranAndroid.sharePdf !== 'function') {
+                return false;
+            }
+
+            const base64 = await this.blobToBase64(this.sharePdfFile);
+            window.ImranAndroid.sharePdf(this.sharePdfFile.name, base64);
+            return true;
+        },
         async loadPdfScript(src, globalChecker) {
             if (globalChecker()) {
                 return;
@@ -849,7 +898,7 @@ new #[Title('POS Terminal')] class extends Component
                 document.body.appendChild(wrapper);
 
                 const canvas = await window.html2canvas(clone, {
-                    scale: 1.5,
+                    scale: this.isAndroidApp() ? 1 : 1.5,
                     useCORS: true,
                     logging: false,
                     backgroundColor: '#ffffff'
@@ -857,7 +906,7 @@ new #[Title('POS Terminal')] class extends Component
 
                 wrapper.remove();
 
-                const imgData = canvas.toDataURL('image/jpeg', 0.98);
+                const imgData = canvas.toDataURL('image/jpeg', this.isAndroidApp() ? 0.88 : 0.98);
                 const imgWidth = isA4 ? 210 : 80;
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
@@ -905,7 +954,10 @@ new #[Title('POS Terminal')] class extends Component
             }
 
             try {
-                if (navigator.share && navigator.canShare?.({ files: [this.sharePdfFile] })) {
+                if (await this.sharePdfWithAndroid()) {
+                    this.shareCopied = true;
+                    setTimeout(() => this.shareCopied = false, 1800);
+                } else if (navigator.share && navigator.canShare?.({ files: [this.sharePdfFile] })) {
                     await navigator.share({
                         files: [this.sharePdfFile],
                         title: this.sharePdfFile.name.replace('.pdf', ''),
@@ -1298,7 +1350,38 @@ new #[Title('POS Terminal')] class extends Component
         x-transition:leave-end="opacity-0"
     >
         <form
-            wire:submit="saveCartItemEditor"
+            x-data="{
+                qty: @js($editQuantity),
+                unit: @js((float) $editUnitPrice),
+                discountType: @js($editDiscountType),
+                discountValue: @js((float) $editDiscountValue),
+                syncFromServer() {
+                    this.qty = Number(@js($editQuantity)) || 1;
+                    this.unit = Number(@js((float) $editUnitPrice)) || 0;
+                    this.discountType = @js($editDiscountType) || 'fixed';
+                    this.discountValue = Number(@js((float) $editDiscountValue)) || 0;
+                },
+                get gross() {
+                    return Math.max(1, Number(this.qty) || 1) * Math.max(0, Number(this.unit) || 0);
+                },
+                get discount() {
+                    const value = Math.max(0, Number(this.discountValue) || 0);
+                    return this.discountType === 'percentage'
+                        ? this.gross * Math.min(value, 100) / 100
+                        : Math.min(value, this.gross);
+                },
+                get total() {
+                    return Math.max(0, this.gross - this.discount);
+                },
+                save() {
+                    this.qty = Math.max(1, Number(this.qty) || 1);
+                    this.unit = Math.max(0, Number(this.unit) || 0);
+                    this.discountValue = Math.max(0, Number(this.discountValue) || 0);
+                    $wire.saveCartItemEditorFromPayload(this.qty, this.unit, this.discountType, this.discountValue);
+                }
+            }"
+            x-effect="if (cartItemEditorOpen) syncFromServer()"
+            @submit.prevent="save()"
             class="w-full max-w-md rounded-[2rem] bg-white p-5 shadow-2xl"
             @click.away="$wire.closeCartItemEditor()"
             x-transition:enter="ease-out duration-200 transform"
@@ -1320,30 +1403,30 @@ new #[Title('POS Terminal')] class extends Component
 
             <div class="mt-4 grid gap-3">
                 <div class="grid grid-cols-2 gap-3">
-                    <flux:input wire:model.live="editQuantity" :label="__('Quantity')" type="number" min="1" step="1" required />
-                    <flux:input wire:model.live="editUnitPrice" :label="__('Unit Price (Rs)')" type="number" min="0" step="0.01" required />
+                    <flux:input x-model.number="qty" :label="__('Quantity')" type="number" min="1" step="1" required inputmode="numeric" />
+                    <flux:input x-model.number="unit" :label="__('Unit Price (Rs)')" type="number" min="0" step="0.01" required inputmode="decimal" />
                 </div>
 
                 <div class="grid grid-cols-2 gap-3">
-                    <flux:select wire:model.live="editDiscountType" :label="__('Discount Type')">
+                    <flux:select x-model="discountType" :label="__('Discount Type')">
                         <option value="fixed">{{ __('Fixed') }}</option>
                         <option value="percentage">{{ __('Percentage') }}</option>
                     </flux:select>
-                    <flux:input wire:model.live="editDiscountValue" :label="__('Discount')" type="number" min="0" step="0.01" />
+                    <flux:input x-model.number="discountValue" :label="__('Discount')" type="number" min="0" step="0.01" inputmode="decimal" />
                 </div>
 
                 <div class="rounded-3xl border border-zinc-100 bg-zinc-50 p-4 text-sm">
                     <div class="flex justify-between gap-3">
                         <span class="text-zinc-500">{{ __('Gross') }}</span>
-                        <span class="font-bold text-zinc-900">Rs {{ number_format($this->cartEditorGross, 2) }}</span>
+                        <span class="font-bold text-zinc-900" x-text="`Rs ${money(gross)}`">Rs {{ number_format($this->cartEditorGross, 2) }}</span>
                     </div>
                     <div class="mt-2 flex justify-between gap-3">
                         <span class="text-zinc-500">{{ __('Item Discount') }}</span>
-                        <span class="font-bold text-emerald-600">- Rs {{ number_format($this->cartEditorDiscount, 2) }}</span>
+                        <span class="font-bold text-emerald-600" x-text="`- Rs ${money(discount)}`">- Rs {{ number_format($this->cartEditorDiscount, 2) }}</span>
                     </div>
                     <div class="mt-3 flex justify-between gap-3 border-t border-zinc-200 pt-3">
                         <span class="font-black text-zinc-950">{{ __('Line Total') }}</span>
-                        <span class="text-lg font-black text-orange-600">Rs {{ number_format($this->cartEditorTotal, 2) }}</span>
+                        <span class="text-lg font-black text-orange-600" x-text="`Rs ${money(total)}`">Rs {{ number_format($this->cartEditorTotal, 2) }}</span>
                     </div>
                 </div>
             </div>
@@ -1529,7 +1612,7 @@ new #[Title('POS Terminal')] class extends Component
 
             <div class="w-full border-t border-zinc-100 pt-4 flex flex-col gap-2">
                 <!-- Browser window print receipt trigger -->
-                <flux:button type="button" @click="window.print()" variant="primary" class="w-full">
+                <flux:button type="button" @click="printBill()" variant="primary" class="w-full">
                     <flux:icon.printer class="size-4 mr-1" />
                     {{ Setting::get('invoice_paper_size', 'thermal_80mm') === 'A4' ? __('Print A4 Invoice') : __('Instant Thermal Receipt') }}
                 </flux:button>
