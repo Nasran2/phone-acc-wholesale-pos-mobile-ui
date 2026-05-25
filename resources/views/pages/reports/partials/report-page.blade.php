@@ -37,18 +37,18 @@
             </div>
         </section>
 
-        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             @foreach ($this->summary as $item)
-                <div class="rounded-2xl border p-4 {{ $this->toneClass($item['tone'], 'box') }}">
+                <div class="rounded-2xl border p-3 sm:p-4 {{ $this->toneClass($item['tone'], 'box') }}">
                     <p class="text-[10px] font-black uppercase tracking-wider opacity-75">{{ __($item['label']) }}</p>
-                    <p class="mt-1 font-display text-xl font-bold">{{ $item['value'] }}</p>
+                    <p class="mt-1 font-display text-lg font-bold leading-tight sm:text-xl">{{ $item['value'] }}</p>
                 </div>
             @endforeach
         </section>
 
         <section class="app-card p-4">
             <div class="grid gap-3 lg:grid-cols-[1fr_auto]">
-                <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
                     @if ($dateSensitive)
                         <flux:select wire:model.live="dateRange" :label="__('Period')">
                             <option value="today">{{ __('Today') }}</option>
@@ -89,7 +89,7 @@
 
                 @if ($reportType !== 'profit-loss')
                     <div class="min-w-0 lg:w-80">
-                        <flux:input wire:model.live.debounce.350ms="search" :label="__('Search')" placeholder="Invoice, name, phone, SKU..." />
+                        <flux:input wire:model.live.debounce.500ms="search" :label="__('Search')" placeholder="Invoice, name, phone, SKU..." />
                     </div>
                 @endif
             </div>
@@ -114,22 +114,22 @@
                 @include('pages.reports.partials.report-table', ['print' => false])
             </div>
 
-            <div class="grid gap-3 p-3 md:hidden">
+            <div class="grid grid-cols-2 gap-2 p-3 md:hidden">
                 @forelse ($this->rows as $row)
-                    <article class="rounded-xl border border-zinc-100 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="report-card-{{ $loop->index }}">
-                        <div class="flex items-start justify-between gap-3">
+                    <article class="rounded-xl border border-zinc-100 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="report-card-{{ $loop->index }}">
+                        <div class="grid gap-2">
                             <div class="min-w-0">
-                                <p class="truncate text-sm font-bold text-zinc-950 dark:text-white">
+                                <p class="truncate text-xs font-bold text-zinc-950 dark:text-white">
                                     {{ $row['invoice_no'] ?? $row['party'] ?? $row['name'] ?? $row['label'] ?? $row['description'] ?? '-' }}
                                 </p>
-                                <p class="mt-1 text-xs text-zinc-500">{{ $row['date'] ?? $row['status'] ?? $meta['title'] }}</p>
+                                <p class="mt-1 truncate text-[11px] text-zinc-500">{{ $row['date'] ?? $row['status'] ?? $meta['title'] }}</p>
                             </div>
                             @if (isset($row['status']))
-                                <flux:badge size="sm" color="zinc">{{ $row['status'] }}</flux:badge>
+                                <flux:badge size="sm" color="zinc" class="w-fit">{{ $row['status'] }}</flux:badge>
                             @endif
                         </div>
 
-                        <dl class="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <dl class="mt-3 grid gap-2 text-xs">
                             @foreach ($this->columns as $column)
                                 <div class="min-w-0 rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60">
                                     <dt class="font-semibold uppercase tracking-wider text-zinc-400">{{ __($column['label']) }}</dt>

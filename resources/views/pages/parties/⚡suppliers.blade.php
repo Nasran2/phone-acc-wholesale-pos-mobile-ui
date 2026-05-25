@@ -236,7 +236,16 @@ new #[Title('Manage Suppliers')] class extends Component
     }
 }; ?>
 
-<div class="flex flex-col gap-6" x-data="{ ledgerOpen: @entangle('selectedSupplierId'), payOpen: @entangle('payingSupplierId') }">
+<div
+    class="flex flex-col gap-6"
+    x-data="{
+        ledgerOpen: @entangle('selectedSupplierId'),
+        payOpen: @entangle('payingSupplierId'),
+        supplierFormOpen: window.innerWidth >= 1024,
+        editingSupplierId: @entangle('supplierId'),
+    }"
+    x-effect="if (editingSupplierId) supplierFormOpen = true"
+>
     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
             <h1 class="font-display text-2xl font-bold tracking-tight text-zinc-950">{{ __('Suppliers Directory') }}</h1>
@@ -247,36 +256,46 @@ new #[Title('Manage Suppliers')] class extends Component
     <!-- Main Section Grid -->
     <div class="grid gap-6 lg:grid-cols-[1fr_2fr]">
         <!-- 1. Supplier Form Card -->
-        <div class="app-card p-5 h-fit">
-            <div class="flex flex-col gap-1 border-b border-zinc-100 pb-4">
-                <h3 class="font-display text-base font-semibold text-zinc-900">
-                    {{ $supplierId ? __('Edit Supplier Profile') : __('Add Supplier Profile') }}
-                </h3>
-                <p class="text-xs text-zinc-500">{{ __('Save wholesale vendor details for inventory purchases and balance audits.') }}</p>
+        <div class="app-card h-fit p-5">
+            <div
+                class="flex cursor-pointer items-center justify-between gap-4 border-b border-zinc-100 pb-4"
+                @click="supplierFormOpen = !supplierFormOpen"
+            >
+                <div class="flex flex-col gap-1">
+                    <h3 class="font-display text-base font-semibold text-zinc-900">
+                        {{ $supplierId ? __('Edit Supplier Profile') : __('Add Supplier Profile') }}
+                    </h3>
+                    <p class="text-xs text-zinc-500">{{ __('Save wholesale vendor details for inventory purchases and balance audits.') }}</p>
+                </div>
+                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-50 transition hover:bg-zinc-100">
+                    <flux:icon.chevron-down class="size-4 text-zinc-500 transition-transform duration-200" x-bind:class="supplierFormOpen ? 'rotate-180' : ''" />
+                </div>
             </div>
 
-            <form wire:submit="saveSupplier" class="mt-4 flex flex-col gap-4">
-                <flux:input wire:model="name" :label="__('Vendor Contact Person')" required />
-                <flux:input wire:model="company_name" :label="__('Company / Distributor Name')" placeholder="e.g. Imran Wholesale Distributors" />
-                <flux:input wire:model="phone" :label="__('Phone Number')" placeholder="e.g. 0777999888" />
-                <flux:input wire:model="email" :label="__('Email Address')" type="email" placeholder="e.g. sales@wholesale.com" />
-                <flux:textarea wire:model="address" :label="__('Vendor Address')" rows="2" />
-                
-                @if (! $supplierId)
-                    <flux:input wire:model="opening_balance" :label="__('Opening Dues (Initial Accounts Payable)')" type="number" step="0.01" />
-                @endif
+            <div x-show="supplierFormOpen" x-collapse>
+                <form wire:submit="saveSupplier" class="mt-4 flex flex-col gap-4">
+                    <flux:input wire:model="name" :label="__('Vendor Contact Person')" required />
+                    <flux:input wire:model="company_name" :label="__('Company / Distributor Name')" placeholder="e.g. Imran Wholesale Distributors" />
+                    <flux:input wire:model="phone" :label="__('Phone Number')" placeholder="e.g. 0777999888" />
+                    <flux:input wire:model="email" :label="__('Email Address')" type="email" placeholder="e.g. sales@wholesale.com" />
+                    <flux:textarea wire:model="address" :label="__('Vendor Address')" rows="2" />
 
-                <div class="mt-4 flex gap-2">
-                    <flux:button type="submit" variant="primary" class="flex-1">
-                        {{ $supplierId ? __('Update Supplier') : __('Register Supplier') }}
-                    </flux:button>
-                    @if ($supplierId)
-                        <flux:button type="button" wire:click="resetForm" variant="ghost">
-                            {{ __('Cancel') }}
-                        </flux:button>
+                    @if (! $supplierId)
+                        <flux:input wire:model="opening_balance" :label="__('Opening Dues (Initial Accounts Payable)')" type="number" step="0.01" />
                     @endif
-                </div>
-            </form>
+
+                    <div class="mt-4 flex gap-2">
+                        <flux:button type="submit" variant="primary" class="flex-1">
+                            {{ $supplierId ? __('Update Supplier') : __('Register Supplier') }}
+                        </flux:button>
+                        @if ($supplierId)
+                            <flux:button type="button" wire:click="resetForm" @click="if (window.innerWidth < 1024) supplierFormOpen = false" variant="ghost">
+                                {{ __('Cancel') }}
+                            </flux:button>
+                        @endif
+                    </div>
+                </form>
+            </div>
         </div>
 
         <!-- 2. Interactive Suppliers List Grid -->
@@ -285,7 +304,7 @@ new #[Title('Manage Suppliers')] class extends Component
                 <div class="flex items-center gap-3">
                     <flux:icon.magnifying-glass class="size-4 text-zinc-400" />
                     <input
-                        wire:model.live.debounce.300ms="search"
+                        wire:model.live.debounce.500ms="search"
                         type="text"
                         placeholder="Search suppliers by name or company name..."
                         class="w-full bg-transparent text-sm text-zinc-950 focus:outline-none"
