@@ -743,7 +743,13 @@ new #[Title('POS Terminal')] class extends Component
             });
         },
         playSuccessBeep() {
-            let ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (!window.imranAudioCtx) {
+                window.imranAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            let ctx = window.imranAudioCtx;
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
             let osc = ctx.createOscillator();
             let gain = ctx.createGain();
             osc.connect(gain);
@@ -931,6 +937,13 @@ new #[Title('POS Terminal')] class extends Component
         },
         downloadPdfFile() {
             if (!this.sharePdfFile) {
+                return;
+            }
+
+            if (this.isAndroidApp() && typeof window.ImranAndroid.downloadPdf === 'function') {
+                this.blobToBase64(this.sharePdfFile).then(base64 => {
+                    window.ImranAndroid.downloadPdf(this.sharePdfFile.name, base64);
+                });
                 return;
             }
 
