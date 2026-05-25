@@ -1,0 +1,274 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import '../../vendor/livewire/flux/dist/flux.css';
+
+@source '../views';
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../vendor/livewire/flux-pro/stubs/**/*.blade.php';
+@source '../../vendor/livewire/flux/stubs/**/*.blade.php';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-display: 'Space Grotesk', 'Manrope', ui-sans-serif, system-ui, sans-serif;
+
+    --color-zinc-50: #fafafa;
+    --color-zinc-100: #f5f5f5;
+    --color-zinc-200: #e5e5e5;
+    --color-zinc-300: #d4d4d4;
+    --color-zinc-400: #a3a3a3;
+    --color-zinc-500: #737373;
+    --color-zinc-600: #525252;
+    --color-zinc-700: #404040;
+    --color-zinc-800: #262626;
+    --color-zinc-900: #171717;
+    --color-zinc-950: #0a0a0a;
+
+    --color-accent: #7c3aed;
+    --color-accent-content: #7c3aed;
+    --color-accent-foreground: var(--color-white);
+}
+
+@layer theme {
+    .dark {
+        --color-accent: #a78bfa;
+        --color-accent-content: #a78bfa;
+        --color-accent-foreground: var(--color-neutral-950);
+    }
+}
+
+@layer components {
+    .app-card {
+        @apply rounded-2xl bg-white border border-zinc-100 shadow-[0_4px_20px_rgba(0,0,0,0.02)] transition-all duration-300 hover:shadow-[0_12px_35px_rgba(124,58,237,0.06)] hover:border-violet-100 dark:bg-zinc-900 dark:border-zinc-800/80 dark:shadow-[0_8px_30px_rgba(0,0,0,0.3)] dark:hover:border-zinc-800;
+    }
+
+    .app-card-muted {
+        @apply rounded-2xl bg-zinc-50 border border-zinc-100/50 dark:bg-zinc-900/50 dark:border-zinc-800/60;
+    }
+
+    .app-chip {
+        @apply inline-flex items-center gap-2 rounded-full border border-violet-100 bg-violet-50/50 px-3 py-1 text-xs font-bold text-violet-700 transition duration-200 hover:bg-violet-100/80 dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300;
+    }
+
+    .print-only {
+        @apply hidden;
+    }
+}
+
+@layer utilities {
+    .font-display {
+        font-family: var(--font-display);
+    }
+    .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+    }
+    .no-scrollbar::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+@layer base {
+
+    *,
+    ::after,
+    ::before,
+    ::backdrop,
+    ::file-selector-button {
+        border-color: var(--color-gray-200, currentColor);
+    }
+}
+
+[data-flux-field]:not(ui-radio, ui-checkbox) {
+    @apply grid gap-2;
+}
+
+[data-flux-label] {
+    @apply  !mb-0 !leading-tight;
+}
+
+input:focus[data-flux-control],
+textarea:focus[data-flux-control],
+select:focus[data-flux-control] {
+    @apply outline-hidden ring-2 ring-accent ring-offset-2 ring-offset-accent-foreground;
+}
+
+/* \[:where(&)\]:size-4 {
+    @apply size-4;
+} */
+
+@media print {
+    @page {
+        size: A4 landscape;
+        margin: 12mm;
+    }
+
+    html,
+    body {
+        background: #ffffff !important;
+    }
+
+    body * {
+        visibility: hidden !important;
+    }
+
+    .print-only,
+    .print-only * {
+        visibility: visible !important;
+    }
+
+    .screen-only,
+    aside,
+    nav,
+    header[data-flux-header],
+    [data-flux-sidebar] {
+        display: none !important;
+    }
+
+    .print-only {
+        display: block !important;
+    }
+
+    .report-print-sheet {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        color: #1f2937;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 12px;
+    }
+
+    .report-print-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        border-bottom: 3px solid #e5e7eb;
+        padding-bottom: 16px;
+    }
+
+    .report-print-header h1 {
+        margin: 0 0 6px;
+        color: #000000;
+        font-size: 26px;
+        font-weight: 800;
+    }
+
+    .report-print-header p {
+        margin: 2px 0;
+        color: #4b5563;
+        font-size: 13px;
+    }
+
+    .report-print-meta {
+        text-align: right;
+    }
+
+    .report-print-meta h2 {
+        margin: 0 0 8px;
+        color: #6d28d9;
+        font-size: 24px;
+        font-weight: 800;
+    }
+
+    .report-print-meta p {
+        color: #1f2937;
+    }
+
+    .report-print-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin: 22px 10px;
+    }
+
+    .report-print-summary div {
+        border: 1px solid #dbe3ec;
+        background: #f8fafc;
+        padding: 12px 10px;
+        text-align: center;
+    }
+
+    .report-print-summary span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+    }
+
+    .report-print-summary strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 17px;
+    }
+
+    .print-emerald {
+        color: #059669;
+    }
+
+    .print-rose {
+        color: #e11d48;
+    }
+
+    .print-violet {
+        color: #6d28d9;
+    }
+
+    .print-zinc {
+        color: #334155;
+    }
+
+    .report-print-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+        font-size: 12px;
+    }
+
+    .report-print-table thead tr {
+        background: #f1f5f9;
+        color: #334155;
+        text-transform: uppercase;
+    }
+
+    .report-print-table th,
+    .report-print-table td {
+        border-bottom: 1px solid #dbe3ec;
+        padding: 9px 10px;
+    }
+
+    .report-print-table th {
+        font-size: 11px;
+        font-weight: 800;
+        text-align: left;
+    }
+
+    .report-print-table tbody tr:nth-child(even) {
+        background: #f8fafc;
+    }
+
+    .report-print-table .text-right {
+        text-align: right;
+    }
+
+    .report-print-signatures {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 80px;
+        margin-top: 80px;
+        padding: 0 70px;
+        text-align: center;
+    }
+
+    .report-print-signatures span {
+        display: block;
+        border-top: 2px solid #111827;
+    }
+
+    .report-print-signatures p {
+        margin-top: 8px;
+        color: #1f2937;
+        font-size: 13px;
+    }
+}

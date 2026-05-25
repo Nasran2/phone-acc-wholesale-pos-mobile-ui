@@ -1,0 +1,17 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # If the request is for the public directory itself, don't redirect
+    RewriteCond %{REQUEST_URI} !^/public/
+
+    # Serve real files and directories in public/ directly
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -f
+    RewriteRule ^ public%{REQUEST_URI} [L]
+
+    # Serve real directories in public/ directly
+    RewriteCond %{DOCUMENT_ROOT}/public%{REQUEST_URI} -d
+    RewriteRule ^ public%{REQUEST_URI} [L]
+
+    # Route everything else through public/index.php
+    RewriteRule ^ public/index.php [L]
+</IfModule>
