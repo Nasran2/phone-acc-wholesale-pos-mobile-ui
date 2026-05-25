@@ -8,11 +8,27 @@ use Livewire\Component;
 
 new class extends Component
 {
+    private const PRODUCT_BATCH_SIZE = 72;
+
     public string $search = '';
 
     public string $selectedCategory = 'ALL';
 
     public string $selectedModel = '';
+
+    public int $productLimit = self::PRODUCT_BATCH_SIZE;
+
+    public function updated(string $property, mixed $value = null): void
+    {
+        if (in_array($property, ['search', 'selectedCategory', 'selectedModel'], true)) {
+            $this->productLimit = self::PRODUCT_BATCH_SIZE;
+        }
+    }
+
+    public function loadMoreProducts(): void
+    {
+        $this->productLimit += self::PRODUCT_BATCH_SIZE;
+    }
 
     /**
      * @return array<int, array{id: int, name: string}>
@@ -86,6 +102,7 @@ new class extends Component
                 });
             })
             ->orderBy('name')
+            ->limit($this->productLimit + 1)
             ->get();
     }
 
@@ -152,11 +169,14 @@ new class extends Component
     </div>
 
     <div class="scrollbar-none min-w-0 overflow-y-auto pb-24 lg:max-h-[calc(100vh-14rem)] lg:pb-0">
+        @php($products = $this->products)
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            @forelse ($this->products as $p)
+            @forelse ($products->take($productLimit) as $p)
                 <div
                     class="group relative flex min-h-[9.25rem] cursor-pointer select-none flex-col justify-between overflow-hidden rounded-[1.25rem] border border-zinc-200 bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.05)] transition data-loading:pointer-events-none data-loading:opacity-70 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-[0_24px_60px_rgba(124,58,237,0.12)] sm:min-h-44 sm:rounded-[1.75rem] sm:p-4 sm:shadow-[0_18px_45px_rgba(15,23,42,0.06)]"
-                    wire:click="$parent.addToCart({{ $p->id }})"
+                    wire:click.throttle.350ms="$parent.addToCart({{ $p->id }})"
+                    wire:loading.attr="aria-busy"
+                    wire:target="$parent.addToCart({{ $p->id }})"
                     wire:island="cart"
                     wire:key="product-pos-{{ $p->id }}"
                 >
@@ -203,5 +223,17 @@ new class extends Component
                 </div>
             @endforelse
         </div>
+
+        @if ($products->count() > $productLimit)
+            <div class="mt-4 flex justify-center">
+                <button
+                    type="button"
+                    wire:click="loadMoreProducts"
+                    class="rounded-2xl border border-zinc-200 bg-white px-5 py-2.5 text-xs font-black text-zinc-700 shadow-sm transition active:scale-95"
+                >
+                    {{ __('Load more products') }}
+                </button>
+            </div>
+        @endif
     </div>
 </div>

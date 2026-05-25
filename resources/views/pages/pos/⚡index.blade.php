@@ -11,6 +11,7 @@ use App\Services\ChequePaymentService;
 use App\Services\SmsNotificationService;
 use App\Services\TextItSmsService;
 use Flux\Flux;
+use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -146,15 +147,20 @@ new #[Title('POS Terminal')] class extends Component
             }
         }
 
-        app(ChequePaymentService::class)->autoPassOverduePendingCheques();
+        Cache::remember(
+            'pos:auto-pass-overdue-cheques:' . today()->toDateString(),
+            now()->addMinutes(15),
+            fn () => app(ChequePaymentService::class)->autoPassOverduePendingCheques()
+        );
         $this->loadHeldOrders();
     }
 
     public function loadHeldOrders(): void
     {
         $this->heldOrders = HoldOrder::query()
-            ->with('customer')
+            ->with('customer:id,name,phone')
             ->orderBy('id', 'desc')
+            ->limit(20)
             ->get()
             ->toArray();
     }
@@ -173,7 +179,6 @@ new #[Title('POS Terminal')] class extends Component
 
         if ($product) {
             $this->addToCart($product->id);
-            $this->dispatch('play-beep'); // Trigger audio beep in frontend
         } else {
             Flux::toast(variant: 'danger', text: __('Product SKU/Barcode not found.'));
         }
@@ -202,6 +207,7 @@ new #[Title('POS Terminal')] class extends Component
                 $this->cart[$index]['quantity']++;
                 $this->syncCartItemSubtotal($index);
                 $this->paid_amount = $this->cartTotal;
+                $this->dispatch('play-beep');
                 return;
             }
         }
@@ -224,6 +230,7 @@ new #[Title('POS Terminal')] class extends Component
         ];
 
         $this->paid_amount = $this->cartTotal;
+        $this->dispatch('play-beep');
     }
 
     public function updateCartQty(int $index, int $qty): void
@@ -842,7 +849,7 @@ new #[Title('POS Terminal')] class extends Component
                 document.body.appendChild(wrapper);
 
                 const canvas = await window.html2canvas(clone, {
-                    scale: 2.5,
+                    scale: 1.5,
                     useCORS: true,
                     logging: false,
                     backgroundColor: '#ffffff'
@@ -1665,4 +1672,9 @@ Due: Rs {{ number_format($this->completedSale->due_amount, 2) }}
             </div>
         @endif
     @endif
+
+    @assets
+        <script src="/vendor/pos-share/html2canvas-pro.min.js" defer></script>
+        <script src="/vendor/pos-share/jspdf.umd.min.js" defer></script>
+    @endassets
 </div>
