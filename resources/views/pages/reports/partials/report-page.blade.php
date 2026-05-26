@@ -65,11 +65,11 @@
             </div>
         </section>
 
-        <section class="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 xl:grid-cols-4">
+        <section class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
             @foreach ($this->summary as $item)
                 <div class="rounded-2xl border p-3 sm:p-4 {{ $this->toneClass($item['tone'], 'box') }}">
                     <p class="text-[10px] font-black uppercase tracking-wider opacity-75">{{ __($item['label']) }}</p>
-                    <p class="mt-1 font-display text-lg font-bold leading-tight sm:text-xl">{{ $item['value'] }}</p>
+                    <p class="mt-1 break-words font-display text-base font-bold leading-tight sm:text-xl">{{ $item['value'] }}</p>
                 </div>
             @endforeach
         </section>
