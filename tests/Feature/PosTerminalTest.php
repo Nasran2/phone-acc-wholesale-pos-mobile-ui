@@ -153,8 +153,8 @@ test('cheque checkout creates a pending hold payment', function () {
 
     expect($sale->payment_status)->toBe('cheque_pending')
         ->and((float) $sale->paid_amount)->toBe(0.0)
-        ->and((float) $sale->due_amount)->toBe(1500.0)
-        ->and((float) $customer->refresh()->due_balance)->toBe(1500.0)
+        ->and((float) $sale->due_amount)->toBe(0.0)
+        ->and((float) $customer->refresh()->due_balance)->toBe(0.0)
         ->and($payment->payment_method)->toBe('cheque')
         ->and($payment->cheque_status)->toBe('pending')
         ->and($payment->cheque_bank)->toBe('BOC')

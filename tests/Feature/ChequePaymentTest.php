@@ -13,7 +13,7 @@ function createChequeSale(string $chequeDate, float $amount = 1000): array
         'name' => 'Cheque Ledger Customer',
         'phone' => '0771111111',
         'opening_balance' => 0,
-        'due_balance' => $amount,
+        'due_balance' => 0,
     ]);
 
     $sale = Sale::query()->create([
@@ -25,7 +25,7 @@ function createChequeSale(string $chequeDate, float $amount = 1000): array
         'tax_amount' => 0,
         'grand_total' => $amount,
         'paid_amount' => 0,
-        'due_amount' => $amount,
+        'due_amount' => 0,
         'payment_status' => 'cheque_pending',
         'profit' => 0,
     ]);
@@ -57,7 +57,7 @@ test('passing a pending cheque settles the sale and customer due', function () {
         ->and((float) $customer->refresh()->due_balance)->toBe(0.0);
 });
 
-test('returning a pending cheque leaves the invoice due', function () {
+test('returning a pending cheque marks the invoice due', function () {
     [$customer, $sale, $payment] = createChequeSale(today()->toDateString());
 
     app(ChequePaymentService::class)->markReturned($payment);

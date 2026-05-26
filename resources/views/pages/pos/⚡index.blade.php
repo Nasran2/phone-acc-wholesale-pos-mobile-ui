@@ -465,7 +465,8 @@ new #[Title('POS Terminal')] class extends Component
         $grandTotal = $this->cartTotal;
         $isChequePayment = $this->payment_method === 'cheque';
         $capturedPaidAmount = $isChequePayment ? 0.00 : min((float) $this->paid_amount, $grandTotal);
-        $dueAmount = max(0.00, $grandTotal - $capturedPaidAmount);
+        $heldChequeAmount = $isChequePayment ? min((float) $this->paid_amount, $grandTotal) : 0.00;
+        $dueAmount = max(0.00, $grandTotal - $capturedPaidAmount - $heldChequeAmount);
 
         if (! $isChequePayment && $dueAmount > 0 && Setting::get('pos_allow_due_sale', '1') === '0') {
             Flux::toast(variant: 'danger', text: __('Due sales disabled in system settings. Full payment required.'));

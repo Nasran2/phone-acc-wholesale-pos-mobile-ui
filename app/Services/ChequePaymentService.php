@@ -25,13 +25,17 @@ class ChequePaymentService
 
             $sale = $payment->paymentable;
             if ($sale instanceof Sale) {
-                $this->applyChequeAmountToSale($sale, (float) $payment->amount);
+                $this->applyPassedChequeToSale($sale, (float) $payment->amount);
             }
 
             $payment->update([
                 'cheque_status' => 'passed',
                 'cheque_processed_at' => now(),
             ]);
+
+            if ($sale instanceof Sale) {
+                $this->syncSaleStatus($sale);
+            }
 
             $shouldNotify = true;
 
@@ -54,15 +58,15 @@ class ChequePaymentService
                 return $payment;
             }
 
-            $sale = $payment->paymentable;
-            if ($sale instanceof Sale) {
-                $this->syncSaleStatus($sale);
-            }
-
             $payment->update([
                 'cheque_status' => 'returned',
                 'cheque_processed_at' => now(),
             ]);
+
+            $sale = $payment->paymentable;
+            if ($sale instanceof Sale) {
+                $this->syncSaleStatus($sale);
+            }
 
             return $payment->refresh();
         });
@@ -104,46 +108,52 @@ class ChequePaymentService
             ->get();
     }
 
-    private function applyChequeAmountToSale(Sale $sale, float $amount): void
+    private function applyPassedChequeToSale(Sale $sale, float $amount): void
     {
         $sale->refresh();
 
-        $remainingDue = max(0, (float) $sale->due_amount);
-        $acceptedAmount = min($amount, $remainingDue);
+        $remainingBalance = max(0, (float) $sale->grand_total - (float) $sale->paid_amount);
+        $acceptedAmount = min($amount, $remainingBalance);
 
         if ($acceptedAmount <= 0) {
-            $this->syncSaleStatus($sale);
-
             return;
         }
 
         $sale->update([
             'paid_amount' => round((float) $sale->paid_amount + $acceptedAmount, 2),
-            'due_amount' => round(max(0, $remainingDue - $acceptedAmount), 2),
         ]);
-
-        if ($sale->customer) {
-            $sale->customer->update([
-                'due_balance' => round(max(0, (float) $sale->customer->due_balance - $acceptedAmount), 2),
-            ]);
-        }
-
-        $this->syncSaleStatus($sale);
     }
 
     private function syncSaleStatus(Sale $sale): void
     {
         $sale->refresh();
-        $dueAmount = (float) $sale->due_amount;
+        $oldDueAmount = (float) $sale->due_amount;
+        $pendingChequeAmount = (float) $sale->payments()
+            ->where('payment_method', 'cheque')
+            ->where('cheque_status', 'pending')
+            ->sum('amount');
         $paidAmount = (float) $sale->paid_amount;
+        $dueAmount = round(max(0, (float) $sale->grand_total - $paidAmount - $pendingChequeAmount), 2);
 
-        $status = 'due';
-        if ($dueAmount <= 0) {
+        $status = 'cheque_pending';
+        if ($pendingChequeAmount <= 0 && $dueAmount <= 0) {
             $status = 'paid';
-        } elseif ($paidAmount > 0) {
+        } elseif ($pendingChequeAmount <= 0 && $paidAmount > 0) {
             $status = 'partial';
+        } elseif ($pendingChequeAmount <= 0) {
+            $status = 'due';
         }
 
-        $sale->update(['payment_status' => $status]);
+        $sale->update([
+            'due_amount' => $dueAmount,
+            'payment_status' => $status,
+        ]);
+
+        $dueDelta = round($dueAmount - $oldDueAmount, 2);
+        if ($dueDelta !== 0.0 && $sale->customer) {
+            $sale->customer->update([
+                'due_balance' => round(max(0, (float) $sale->customer->due_balance + $dueDelta), 2),
+            ]);
+        }
     }
 }
