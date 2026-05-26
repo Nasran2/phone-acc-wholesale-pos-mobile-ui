@@ -398,6 +398,8 @@ new #[Title('Manage Customers')] class extends Component
     ledgerOpen: @entangle('selectedCustomerId'), 
     payOpen: @entangle('payingCustomerId'),
     saleOpen: @entangle('selectedSaleId'),
+    editingCustomerId: @entangle('customerId'),
+    mobileCustomerEditOpen: false,
     shareCopied: false,
     sharePreparing: false,
     sharePdfError: false,
@@ -408,6 +410,13 @@ new #[Title('Manage Customers')] class extends Component
         this.$watch('ledgerOpen', (val) => {
             if (!val) this.resetSharePdf();
         });
+        this.$watch('editingCustomerId', (val) => {
+            this.mobileCustomerEditOpen = !!val && window.innerWidth < 1024;
+        });
+
+        if (this.editingCustomerId && window.innerWidth < 1024) {
+            this.mobileCustomerEditOpen = true;
+        }
     },
     resetSharePdf() {
         this.shareCopied = false;
@@ -590,13 +599,13 @@ new #[Title('Manage Customers')] class extends Component
                 showForm: window.innerWidth >= 1024,
                 editingId: @entangle('customerId'),
                 revealForm() {
+                    if (window.innerWidth < 1024) {
+                        return;
+                    }
+
                     this.showForm = true;
 
                     this.$nextTick(() => {
-                        if (window.innerWidth < 1024) {
-                            this.$el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }
-
                         this.$el.querySelector('input')?.focus({ preventScroll: true });
                     });
                 },
@@ -724,6 +733,63 @@ new #[Title('Manage Customers')] class extends Component
                 {{ $this->customers->links() }}
             </div>
         </div>
+    </div>
+
+    <!-- 3. MOBILE CUSTOMER EDIT POPUP -->
+    <div
+        x-cloak
+        x-show="mobileCustomerEditOpen"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 transition-opacity backdrop-blur-sm lg:hidden"
+        @click.self="mobileCustomerEditOpen = false; $wire.resetForm()"
+        x-transition:enter="ease-out duration-200"
+        x-transition:enter-start="opacity-0"
+        x-transition:enter-end="opacity-100"
+        x-transition:leave="ease-in duration-150"
+        x-transition:leave-start="opacity-100"
+        x-transition:leave-end="opacity-0"
+    >
+        <form
+            wire:submit="saveCustomer"
+            class="w-full max-w-md rounded-[2rem] bg-white p-5 shadow-2xl"
+            x-transition:enter="ease-out duration-200 transform"
+            x-transition:enter-start="translate-y-4 scale-95"
+            x-transition:enter-end="translate-y-0 scale-100"
+            x-transition:leave="ease-in duration-150 transform"
+            x-transition:leave-start="translate-y-0 scale-100"
+            x-transition:leave-end="translate-y-4 scale-95"
+        >
+            <div class="flex items-start justify-between gap-4 border-b border-zinc-100 pb-4">
+                <div>
+                    <p class="text-[10px] font-black uppercase tracking-widest text-violet-500">{{ __('Customer profile') }}</p>
+                    <h3 class="mt-1 text-lg font-black text-zinc-950">{{ __('Edit Customer') }}</h3>
+                </div>
+                <button
+                    type="button"
+                    wire:click="resetForm"
+                    class="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-zinc-200 text-zinc-500 transition hover:bg-zinc-50"
+                >
+                    <flux:icon.x-mark class="size-4" />
+                </button>
+            </div>
+
+            <div class="mt-4 grid gap-3">
+                <flux:input wire:model="name" :label="__('Customer Name')" required />
+                <div class="grid grid-cols-2 gap-3">
+                    <flux:input wire:model="phone" :label="__('Phone')" placeholder="0771234567" />
+                    <flux:input wire:model="email" :label="__('Email')" type="email" />
+                </div>
+                <flux:textarea wire:model="address" :label="__('Billing Address')" rows="2" />
+            </div>
+
+            <div class="mt-5 grid grid-cols-2 gap-2">
+                <flux:button type="button" wire:click="resetForm" variant="ghost" class="w-full">
+                    {{ __('Cancel') }}
+                </flux:button>
+                <flux:button type="submit" variant="primary" class="w-full bg-zinc-950!">
+                    {{ __('Update') }}
+                </flux:button>
+            </div>
+        </form>
     </div>
 
     <!-- 3. CUSTOMER LEDGER STATEMENT DRAWER / MODAL -->
