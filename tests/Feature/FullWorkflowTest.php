@@ -139,6 +139,52 @@ test('customer can be added inside checkout and used on the sale', function () {
         ->and((float) $customer->due_balance)->toBe(0.0);
 });
 
+test('pos keeps selected customer visible and resets cart for next checkout', function () {
+    $walkIn = Customer::query()->create([
+        'name' => 'Walk-in Customer',
+        'phone' => '0000000000',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    foreach (range(1, 30) as $index) {
+        Customer::query()->create([
+            'name' => sprintf('Queue Customer %02d', $index),
+            'phone' => '077900'.str_pad((string) $index, 4, '0', STR_PAD_LEFT),
+            'opening_balance' => 0,
+            'due_balance' => 0,
+        ]);
+    }
+
+    $customer = Customer::query()->create([
+        'name' => 'Selected Mobile Customer',
+        'phone' => '0771234099',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $product = Product::factory()->create([
+        'name' => 'Mobile Reset Cable',
+        'cost_price' => 50,
+        'selling_price' => 300,
+        'stock_quantity' => 3,
+        'is_active' => true,
+    ]);
+
+    Livewire::actingAs(workflowUser())
+        ->test('pages::pos.index')
+        ->set('customer_id', $customer->id)
+        ->assertSee('Selected Mobile Customer')
+        ->call('addToCart', $product->id)
+        ->set('payment_method', 'card')
+        ->set('paid_amount', 300)
+        ->call('submitCheckout')
+        ->assertHasNoErrors()
+        ->assertSet('successOpen', true)
+        ->assertSet('cart', [])
+        ->assertSet('customer_id', $walkIn->id);
+});
+
 test('sales due collection updates invoice customer balance and payment ledger', function () {
     $customer = Customer::query()->create([
         'name' => 'Pay Due Customer',
