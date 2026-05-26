@@ -4,11 +4,11 @@
     $dateSensitive = $meta['date_sensitive'];
 @endphp
 
-<div class="flex flex-col gap-5 print:block" x-data="{ range: @entangle('dateRange') }">
-    <div class="screen-only flex flex-col gap-5">
+<div class="flex flex-col gap-4 print:block sm:gap-5" x-data="{ range: @entangle('dateRange'), reportsOpen: false }">
+    <div class="screen-only flex flex-col gap-4 pb-24 sm:gap-5 md:pb-0">
         <section class="app-card p-4 sm:p-5">
             <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-                <div>
+                <div class="min-w-0">
                     <p class="text-xs font-black uppercase tracking-wider text-violet-600 dark:text-violet-300">{{ __($meta['eyebrow']) }}</p>
                     <h1 class="mt-1 font-display text-2xl font-bold tracking-tight text-zinc-950 dark:text-white">{{ __($meta['title']) }}</h1>
                     <p class="mt-1 max-w-3xl text-sm text-zinc-500 dark:text-zinc-400">{{ __($meta['description']) }}</p>
@@ -24,7 +24,35 @@
                 </div>
             </div>
 
-            <div class="mt-5 flex gap-2 overflow-x-auto border-t border-zinc-100 pt-4 dark:border-zinc-800">
+            <div class="mt-5 border-t border-zinc-100 pt-4 md:hidden dark:border-zinc-800">
+                <button
+                    type="button"
+                    @click="reportsOpen = ! reportsOpen"
+                    class="flex w-full items-center justify-between rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3 text-left text-sm font-black text-violet-700 shadow-sm transition active:scale-[0.99] dark:border-violet-900/50 dark:bg-violet-950/30 dark:text-violet-300"
+                >
+                    <span>{{ __('All reports') }}</span>
+                    <flux:icon.chevron-down x-show="! reportsOpen" class="size-4" />
+                    <flux:icon.chevron-up x-show="reportsOpen" class="size-4" />
+                </button>
+
+                <div x-cloak x-show="reportsOpen" x-transition class="mt-3 grid gap-2">
+                    @foreach ($this->reportPages as $page)
+                        <a
+                            href="{{ route($page['route']) }}"
+                            wire:navigate
+                            @click="reportsOpen = false"
+                            class="flex min-h-11 items-center justify-between rounded-xl px-3 py-2 text-sm font-bold transition {{ request()->routeIs($page['route']) || ($page['route'] === 'reports.sales' && request()->routeIs('reports.index')) ? 'bg-violet-600 text-white shadow-sm' : 'bg-zinc-50 text-zinc-600 hover:bg-violet-50 hover:text-violet-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-violet-950/40 dark:hover:text-violet-300' }}"
+                        >
+                            <span>{{ __($page['label']) }}</span>
+                            @if (request()->routeIs($page['route']) || ($page['route'] === 'reports.sales' && request()->routeIs('reports.index')))
+                                <flux:icon.check class="size-4" />
+                            @endif
+                        </a>
+                    @endforeach
+                </div>
+            </div>
+
+            <div class="mt-5 hidden gap-2 overflow-x-auto border-t border-zinc-100 pt-4 md:flex dark:border-zinc-800">
                 @foreach ($this->reportPages as $page)
                     <a
                         href="{{ route($page['route']) }}"
@@ -37,7 +65,7 @@
             </div>
         </section>
 
-        <section class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4">
+        <section class="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3 xl:grid-cols-4">
             @foreach ($this->summary as $item)
                 <div class="rounded-2xl border p-3 sm:p-4 {{ $this->toneClass($item['tone'], 'box') }}">
                     <p class="text-[10px] font-black uppercase tracking-wider opacity-75">{{ __($item['label']) }}</p>
@@ -48,7 +76,7 @@
 
         <section class="app-card p-4">
             <div class="grid gap-3 lg:grid-cols-[1fr_auto]">
-                <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     @if ($dateSensitive)
                         <flux:select wire:model.live="dateRange" :label="__('Period')">
                             <option value="today">{{ __('Today') }}</option>
@@ -114,15 +142,15 @@
                 @include('pages.reports.partials.report-table', ['print' => false])
             </div>
 
-            <div class="grid grid-cols-2 gap-2 p-3 md:hidden">
+            <div class="grid grid-cols-1 gap-3 p-3 pb-28 sm:grid-cols-2 md:hidden">
                 @forelse ($this->rows as $row)
-                    <article class="rounded-xl border border-zinc-100 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="report-card-{{ $loop->index }}">
+                    <article class="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="report-card-{{ $loop->index }}">
                         <div class="grid gap-2">
                             <div class="min-w-0">
-                                <p class="truncate text-xs font-bold text-zinc-950 dark:text-white">
+                                <p class="line-clamp-2 text-sm font-bold leading-snug text-zinc-950 dark:text-white">
                                     {{ $row['invoice_no'] ?? $row['party'] ?? $row['name'] ?? $row['label'] ?? $row['description'] ?? '-' }}
                                 </p>
-                                <p class="mt-1 truncate text-[11px] text-zinc-500">{{ $row['date'] ?? $row['status'] ?? $meta['title'] }}</p>
+                                <p class="mt-1 break-words text-xs text-zinc-500">{{ $row['date'] ?? $row['status'] ?? $meta['title'] }}</p>
                             </div>
                             @if (isset($row['status']))
                                 <flux:badge size="sm" color="zinc" class="w-fit">{{ $row['status'] }}</flux:badge>
@@ -131,9 +159,9 @@
 
                         <dl class="mt-3 grid gap-2 text-xs">
                             @foreach ($this->columns as $column)
-                                <div class="min-w-0 rounded-lg bg-zinc-50 p-2 dark:bg-zinc-800/60">
+                                <div class="min-w-0 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800/60">
                                     <dt class="font-semibold uppercase tracking-wider text-zinc-400">{{ __($column['label']) }}</dt>
-                                    <dd class="mt-1 truncate font-bold {{ isset($column['tone']) ? $this->toneClass($column['tone']) : 'text-zinc-800 dark:text-zinc-100' }}">
+                                    <dd class="mt-1 break-words font-bold {{ isset($column['tone']) ? $this->toneClass($column['tone']) : 'text-zinc-800 dark:text-zinc-100' }}">
                                         {{ $this->displayValue($row, $column) }}
                                     </dd>
                                 </div>
@@ -141,7 +169,7 @@
                         </dl>
                     </article>
                 @empty
-                    <div class="rounded-xl border border-dashed border-zinc-200 p-8 text-center text-sm font-medium text-zinc-400 dark:border-zinc-800">
+                    <div class="rounded-xl border border-dashed border-zinc-200 p-8 text-center text-sm font-medium text-zinc-400 dark:border-zinc-800 sm:col-span-2">
                         {{ __($meta['empty']) }}
                     </div>
                 @endforelse

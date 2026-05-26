@@ -185,6 +185,29 @@ test('pos keeps selected customer visible and resets cart for next checkout', fu
         ->assertSet('customer_id', $walkIn->id);
 });
 
+test('pos cart quantity can be typed and adjusted with buttons', function () {
+    $product = Product::factory()->create([
+        'name' => 'Typable Quantity Charger',
+        'cost_price' => 100,
+        'selling_price' => 250,
+        'stock_quantity' => 5,
+        'is_active' => true,
+    ]);
+
+    Livewire::actingAs(workflowUser())
+        ->test('pages::pos.index')
+        ->call('addToCart', $product->id)
+        ->call('updateCartQty', 0, '3')
+        ->assertSet('cart.0.quantity', 3)
+        ->assertSet('cart.0.subtotal', 750.0)
+        ->call('updateCartQty', 0, 4)
+        ->assertSet('cart.0.quantity', 4)
+        ->assertSet('cart.0.subtotal', 1000.0)
+        ->call('updateCartQty', 0, '')
+        ->assertSet('cart.0.quantity', 1)
+        ->assertSet('cart.0.subtotal', 250.0);
+});
+
 test('sales due collection updates invoice customer balance and payment ledger', function () {
     $customer = Customer::query()->create([
         'name' => 'Pay Due Customer',

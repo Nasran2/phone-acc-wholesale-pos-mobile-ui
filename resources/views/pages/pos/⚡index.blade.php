@@ -234,10 +234,11 @@ new #[Title('POS Terminal')] class extends Component
         $this->dispatch('play-beep');
     }
 
-    public function updateCartQty(int $index, int $qty): void
+    public function updateCartQty(int $index, int|string|null $qty): void
     {
         if (isset($this->cart[$index])) {
-            $newQty = max(1, $qty);
+            $typedQuantity = filter_var($qty, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+            $newQty = $typedQuantity === false ? 1 : $typedQuantity;
             $stockQuantity = (int) ($this->cart[$index]['stock'] ?? 0);
 
             if ($newQty > $stockQuantity && ! $this->allowNegativeStock) {
@@ -1119,9 +1120,19 @@ new #[Title('POS Terminal')] class extends Component
                         <!-- Row control and details -->
                         <div class="flex items-center justify-between border-t border-zinc-100 pt-2 text-xs">
                             <div class="flex items-center gap-1 bg-white rounded-xl border border-zinc-200 p-0.5">
-                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] - 1 }})" class="size-5 rounded-lg hover:bg-zinc-100 flex items-center justify-center font-bold text-zinc-600">-</button>
-                                <span class="px-2 font-bold text-zinc-900">{{ $item['quantity'] }}</span>
-                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] + 1 }})" class="size-5 rounded-lg hover:bg-zinc-100 flex items-center justify-center font-bold text-zinc-600">+</button>
+                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] - 1 }})" class="size-6 rounded-lg hover:bg-zinc-100 flex items-center justify-center font-bold text-zinc-600" aria-label="{{ __('Decrease quantity') }}">-</button>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    inputmode="numeric"
+                                    value="{{ $item['quantity'] }}"
+                                    @if (! $allowNegativeStock) max="{{ $item['stock'] }}" @endif
+                                    wire:change="updateCartQty({{ $index }}, $event.target.value)"
+                                    class="h-6 w-10 appearance-none bg-transparent text-center text-xs font-bold text-zinc-900 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    aria-label="{{ __('Quantity') }}"
+                                />
+                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] + 1 }})" class="size-6 rounded-lg hover:bg-zinc-100 flex items-center justify-center font-bold text-zinc-600" aria-label="{{ __('Increase quantity') }}">+</button>
                             </div>
 
                             <div class="flex items-center gap-1.5">
@@ -1269,9 +1280,19 @@ new #[Title('POS Terminal')] class extends Component
 
                         <div class="flex items-center justify-between border-t border-zinc-100 pt-2 text-xs">
                             <div class="flex items-center gap-1 bg-white rounded-xl border border-zinc-200 p-0.5">
-                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] - 1 }})" class="size-5 rounded-lg flex items-center justify-center font-bold text-zinc-600">-</button>
-                                <span class="px-2 font-bold text-zinc-900">{{ $item['quantity'] }}</span>
-                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] + 1 }})" class="size-5 rounded-lg flex items-center justify-center font-bold text-zinc-600">+</button>
+                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] - 1 }})" class="size-6 rounded-lg flex items-center justify-center font-bold text-zinc-600" aria-label="{{ __('Decrease quantity') }}">-</button>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    inputmode="numeric"
+                                    value="{{ $item['quantity'] }}"
+                                    @if (! $allowNegativeStock) max="{{ $item['stock'] }}" @endif
+                                    wire:change="updateCartQty({{ $index }}, $event.target.value)"
+                                    class="h-6 w-10 appearance-none bg-transparent text-center text-xs font-bold text-zinc-900 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    aria-label="{{ __('Quantity') }}"
+                                />
+                                <button type="button" wire:click="updateCartQty({{ $index }}, {{ $item['quantity'] + 1 }})" class="size-6 rounded-lg flex items-center justify-center font-bold text-zinc-600" aria-label="{{ __('Increase quantity') }}">+</button>
                             </div>
 
                             <div class="flex items-center gap-2">

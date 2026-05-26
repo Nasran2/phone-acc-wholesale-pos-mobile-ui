@@ -85,6 +85,7 @@ test('authenticated users can visit every separate business report page', functi
     $this->get(route($routeName))
         ->assertOk()
         ->assertSee($heading)
+        ->assertSee('All reports')
         ->assertSee('PDF / Print')
         ->assertSee('Prepared By')
         ->assertSee('Authorized Signatory');
