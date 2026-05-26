@@ -35,6 +35,38 @@ test('customers can be added with an opening due balance', function () {
         ->and((float) $customer->due_balance)->toBe(750.0);
 });
 
+test('customers can be edited from the customer list', function () {
+    $customer = Customer::query()->create([
+        'name' => 'Edit Me Customer',
+        'phone' => '0771234999',
+        'email' => 'old@example.test',
+        'address' => 'Old Road',
+        'opening_balance' => 250,
+        'due_balance' => 250,
+    ]);
+
+    Livewire::actingAs(workflowUser())
+        ->test('pages::parties.customers')
+        ->call('editCustomer', $customer->id)
+        ->assertSet('customerId', $customer->id)
+        ->assertSet('name', 'Edit Me Customer')
+        ->set('name', 'Edited Customer')
+        ->set('phone', '0771234888')
+        ->set('email', 'new@example.test')
+        ->set('address', 'New Road')
+        ->call('saveCustomer')
+        ->assertHasNoErrors()
+        ->assertSet('customerId', null);
+
+    expect($customer->refresh())
+        ->name->toBe('Edited Customer')
+        ->phone->toBe('0771234888')
+        ->email->toBe('new@example.test')
+        ->address->toBe('New Road')
+        ->and((float) $customer->opening_balance)->toBe(250.0)
+        ->and((float) $customer->due_balance)->toBe(250.0);
+});
+
 test('cash sale with full payment records paid invoice payment and stock deduction', function () {
     $customer = Customer::query()->create([
         'name' => 'Full Cash Customer',

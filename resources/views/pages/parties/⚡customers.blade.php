@@ -584,7 +584,25 @@ new #[Title('Manage Customers')] class extends Component
     <!-- Main Section Grid -->
     <div class="grid gap-6 lg:grid-cols-[1fr_2fr]">
         <!-- 1. Customer Form Card -->
-        <div class="app-card p-5 h-fit" x-data="{ showForm: window.innerWidth >= 1024, editingId: @entangle('customerId') }" x-effect="if(editingId) showForm = true">
+        <div
+            class="app-card p-5 h-fit scroll-mt-24"
+            x-data="{
+                showForm: window.innerWidth >= 1024,
+                editingId: @entangle('customerId'),
+                revealForm() {
+                    this.showForm = true;
+
+                    this.$nextTick(() => {
+                        if (window.innerWidth < 1024) {
+                            this.$el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+
+                        this.$el.querySelector('input')?.focus({ preventScroll: true });
+                    });
+                },
+            }"
+            x-init="$watch('editingId', (value) => { if (value) revealForm() }); if (editingId) revealForm()"
+        >
             <div 
                 class="flex items-center justify-between border-b border-zinc-100 pb-4 cursor-pointer group"
                 @click="showForm = !showForm"
