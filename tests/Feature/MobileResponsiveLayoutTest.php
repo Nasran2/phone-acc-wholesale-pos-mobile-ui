@@ -18,6 +18,8 @@ test('party directories use compact mobile cards and collapsible supplier regist
     $this->get(route('parties.customers'))
         ->assertOk()
         ->assertSee('grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-3', false)
+        ->assertSee('mobileCustomerEditOpen', false)
+        ->assertSee('lg:hidden', false)
         ->assertSee('wire:model.live.debounce.500ms="search"', false);
 
     $this->get(route('parties.suppliers'))
@@ -33,6 +35,6 @@ test('business reports use two column mobile summary and result cards', function
     $this->get(route('reports.sales'))
         ->assertOk()
         ->assertSee('grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-4', false)
-        ->assertSee('grid grid-cols-2 gap-2 p-3 md:hidden', false)
+        ->assertSee('grid grid-cols-1 gap-3 p-3 pb-28 sm:grid-cols-2 md:hidden', false)
         ->assertSee('wire:model.live.debounce.500ms="search"', false);
 });
