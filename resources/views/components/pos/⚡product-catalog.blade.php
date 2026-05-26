@@ -177,7 +177,6 @@ new class extends Component
                     wire:click.throttle.350ms="$parent.addToCart({{ $p->id }})"
                     wire:loading.attr="aria-busy"
                     wire:target="$parent.addToCart({{ $p->id }})"
-                    wire:island="cart"
                     wire:key="product-pos-{{ $p->id }}"
                 >
                     @if ($p->stock_quantity <= 0)

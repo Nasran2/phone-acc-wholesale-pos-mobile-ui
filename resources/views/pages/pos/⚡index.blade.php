@@ -11,6 +11,7 @@ use App\Services\ChequePaymentService;
 use App\Services\SmsNotificationService;
 use App\Services\TextItSmsService;
 use Flux\Flux;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -589,7 +590,7 @@ new #[Title('POS Terminal')] class extends Component
         }
 
         ActivityLogger::log('pos_sale', "Completed Checkout {$invoiceNo}. Grand Total: Rs {$grandTotal}, Cashier: " . auth()->user()->name);
-        
+
         $this->completedSaleId = $sale->id;
         $this->checkoutOpen = false;
         $this->cartDrawerOpen = false;
@@ -598,6 +599,8 @@ new #[Title('POS Terminal')] class extends Component
         if (! $isEditingSale) {
             $smsNotificationService->notifySaleCreated($sale);
         }
+
+        $this->resetCart();
     }
 
     public function triggerSMSNotification(TextItSmsService $smsService): void
@@ -628,7 +631,7 @@ new #[Title('POS Terminal')] class extends Component
 
     public function resetCart(): void
     {
-        $this->reset('cart', 'discount', 'tax', 'paid_amount', 'payment_method', 'payment_reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'notes', 'customerSearch');
+        $this->reset('cart', 'discount', 'discount_type', 'tax', 'paid_amount', 'payment_method', 'payment_reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'notes', 'customerSearch');
         $defaultCust = Customer::query()->where('name', 'Walk-in Customer')->first();
         if ($defaultCust) {
             $this->customer_id = $defaultCust->id;
@@ -643,11 +646,11 @@ new #[Title('POS Terminal')] class extends Component
     }
 
     #[Computed]
-    public function customers()
+    public function customers(): Collection
     {
         $search = trim($this->customerSearch);
 
-        return Customer::query()
+        $customers = Customer::query()
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($customerQuery) use ($search) {
                     $customerQuery->where('name', 'like', '%' . $search . '%')
@@ -659,8 +662,23 @@ new #[Title('POS Terminal')] class extends Component
             ->orderBy('name')
             ->limit(25)
             ->get();
+
+        if ($this->customer_id) {
+            $selectedCustomer = Customer::query()->find($this->customer_id);
+
+            if ($selectedCustomer && ! $customers->contains('id', $selectedCustomer->id)) {
+                $customers->prepend($selectedCustomer);
+            }
+        }
+
+        return $customers->unique('id')->values();
     }
 
+    #[Computed]
+    public function selectedCustomer(): ?Customer
+    {
+        return Customer::query()->find($this->customer_id);
+    }
 
     #[Computed]
     public function cartSubtotal()
@@ -1026,12 +1044,10 @@ new #[Title('POS Terminal')] class extends Component
                     <flux:icon.plus class="size-4 text-emerald-500" />
                     {{ __('Product') }}
                 </a>
-                @island(name: 'cart')
-                    <button type="button" @click="mobCartOpen = true" class="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-3 py-2 text-xs font-black text-white shadow-[0_14px_30px_rgba(15,23,42,0.22)] transition active:scale-95">
-                        <flux:icon.shopping-cart class="size-4" />
-                        {{ count($cart) }}
-                    </button>
-                @endisland
+                <button type="button" @click="mobCartOpen = true" class="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-3 py-2 text-xs font-black text-white shadow-[0_14px_30px_rgba(15,23,42,0.22)] transition active:scale-95">
+                    <flux:icon.shopping-cart class="size-4" />
+                    {{ count($cart) }}
+                </button>
             </div>
         </div>
     </header>
@@ -1068,7 +1084,6 @@ new #[Title('POS Terminal')] class extends Component
             <livewire:pos.product-catalog />
         </div>
 
-        @island(name: 'cart')
         <!-- 2. Right Column: Desktop Cart Panel (Hidden on Mobile) -->
         <div class="hidden min-h-0 min-w-0 flex-col rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_22px_70px_rgba(15,23,42,0.10)] lg:flex lg:max-h-[calc(100vh-14rem)]">
             <div class="flex items-center justify-between border-b border-zinc-100 pb-4">
@@ -1149,11 +1164,9 @@ new #[Title('POS Terminal')] class extends Component
                 </div>
             </div>
         </div>
-        @endisland
     </div>
 
     <!-- 3. MOBILE FLOATING CART BUTTON CHIP (Only on mobile when cart > 0) -->
-    @island(name: 'cart')
     @if (count($cart) > 0)
         <div class="fixed bottom-16 right-4 z-40 lg:hidden">
             <button
@@ -1295,7 +1308,6 @@ new #[Title('POS Terminal')] class extends Component
             </div>
         </div>
     </div>
-    @endisland
 
     <!-- 5. QUICK CUSTOMER CREATE POPUP -->
     <div
@@ -1498,11 +1510,16 @@ new #[Title('POS Terminal')] class extends Component
                     <flux:input wire:model.live.debounce.250ms="customerSearch" placeholder="Search customer name, phone, email..." />
 
                     <div class="mt-3">
-                        <flux:select wire:model="customer_id" required>
+                        <flux:select wire:model.live="customer_id" required>
                             @foreach ($this->customers as $cust)
                                 <option value="{{ $cust->id }}">{{ $cust->name }} ({{ $cust->phone ?: 'Walk-in' }})</option>
                             @endforeach
                         </flux:select>
+                        @if ($this->selectedCustomer)
+                            <p class="mt-2 text-xs font-bold text-zinc-700">
+                                {{ __('Selected') }}: {{ $this->selectedCustomer->name }}
+                            </p>
+                        @endif
                     </div>
                 </div>
 
