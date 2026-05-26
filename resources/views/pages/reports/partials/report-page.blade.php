@@ -145,23 +145,23 @@
             <div class="grid grid-cols-1 gap-3 p-3 pb-28 sm:grid-cols-2 md:hidden">
                 @forelse ($this->rows as $row)
                     <article class="rounded-2xl border border-zinc-100 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="report-card-{{ $loop->index }}">
-                        <div class="grid gap-2">
-                            <div class="min-w-0">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0 flex-1">
                                 <p class="line-clamp-2 text-sm font-bold leading-snug text-zinc-950 dark:text-white">
                                     {{ $row['invoice_no'] ?? $row['party'] ?? $row['name'] ?? $row['label'] ?? $row['description'] ?? '-' }}
                                 </p>
                                 <p class="mt-1 break-words text-xs text-zinc-500">{{ $row['date'] ?? $row['status'] ?? $meta['title'] }}</p>
                             </div>
                             @if (isset($row['status']))
-                                <flux:badge size="sm" color="zinc" class="w-fit">{{ $row['status'] }}</flux:badge>
+                                <flux:badge size="sm" color="zinc" class="shrink-0">{{ $row['status'] }}</flux:badge>
                             @endif
                         </div>
 
-                        <dl class="mt-3 grid gap-2 text-xs">
+                        <dl class="mt-3 divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-100 bg-zinc-50/60 text-xs dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-800/40">
                             @foreach ($this->columns as $column)
-                                <div class="min-w-0 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800/60">
-                                    <dt class="font-semibold uppercase tracking-wider text-zinc-400">{{ __($column['label']) }}</dt>
-                                    <dd class="mt-1 break-words font-bold {{ isset($column['tone']) ? $this->toneClass($column['tone']) : 'text-zinc-800 dark:text-zinc-100' }}">
+                                <div class="flex min-w-0 items-center justify-between gap-3 px-3 py-2.5">
+                                    <dt class="shrink-0 font-semibold uppercase tracking-wider text-zinc-400">{{ __($column['label']) }}</dt>
+                                    <dd class="min-w-0 break-words text-right font-bold {{ isset($column['tone']) ? $this->toneClass($column['tone']) : 'text-zinc-800 dark:text-zinc-100' }}">
                                         {{ $this->displayValue($row, $column) }}
                                     </dd>
                                 </div>
