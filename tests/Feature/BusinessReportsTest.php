@@ -6,6 +6,7 @@ use App\Models\Purchase;
 use App\Models\Sale;
 use App\Models\Supplier;
 use App\Models\User;
+use App\Services\ChequePaymentService;
 use Livewire\Livewire;
 
 function seedBusinessReportTransactions(): void
@@ -135,4 +136,59 @@ test('business report filters render the correct report data', function () {
         ->set('reportStatus', 'customer_due')
         ->assertSee('INV-REPORT-100')
         ->assertDontSee('PUR-REPORT-100');
+});
+
+test('pending cheque holds stay out of due reports until returned', function () {
+    $customer = Customer::query()->create([
+        'name' => 'Pending Cheque Customer',
+        'phone' => '0777777777',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $sale = Sale::query()->create([
+        'customer_id' => $customer->id,
+        'invoice_no' => 'INV-CHEQUE-HOLD',
+        'date' => today()->toDateString(),
+        'subtotal_amount' => 1500,
+        'discount_amount' => 0,
+        'tax_amount' => 0,
+        'grand_total' => 1500,
+        'paid_amount' => 0,
+        'due_amount' => 0,
+        'payment_status' => 'cheque_pending',
+        'profit' => 0,
+    ]);
+
+    $payment = $sale->payments()->create([
+        'amount' => 1500,
+        'payment_method' => 'cheque',
+        'date' => today()->toDateString(),
+        'reference' => 'CHQ-HOLD',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'CHQ-HOLD',
+        'cheque_date' => today()->addDay()->toDateString(),
+        'cheque_status' => 'pending',
+    ]);
+
+    Livewire::actingAs(User::factory()->create())
+        ->test('pages::reports.due-bills')
+        ->assertSee('No due bills found')
+        ->assertDontSee('INV-CHEQUE-HOLD');
+
+    Livewire::actingAs(User::factory()->create())
+        ->test('pages::reports.customer-dues')
+        ->set('reportStatus', 'with_due')
+        ->assertSee('No customer due records found')
+        ->assertDontSee('Pending Cheque Customer');
+
+    app(ChequePaymentService::class)->markReturned($payment);
+
+    Livewire::actingAs(User::factory()->create())
+        ->test('pages::reports.due-bills')
+        ->assertSee('INV-CHEQUE-HOLD')
+        ->assertSee('Pending Cheque Customer');
+
+    expect((float) $sale->refresh()->due_amount)->toBe(1500.0)
+        ->and((float) $customer->refresh()->due_balance)->toBe(1500.0);
 });
