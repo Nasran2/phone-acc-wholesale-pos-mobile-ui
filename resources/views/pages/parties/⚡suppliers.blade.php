@@ -331,7 +331,7 @@ new #[Title('Manage Suppliers')] class extends Component
             ->where(function ($query): void {
                 $query->where('cheque_no', 'like', '%'.$this->payPartyChequeSearch.'%')
                     ->orWhere('reference', 'like', '%'.$this->payPartyChequeSearch.'%')
-                    ->orWhereHas('paymentable', fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'));
+                    ->orWhereHasMorph('paymentable', [\App\Models\Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'));
             })
             ->with('paymentable.customer')
             ->limit(5)
@@ -650,14 +650,25 @@ new #[Title('Manage Suppliers')] class extends Component
             </div>
 
             <form wire:submit="savePayment" class="mt-4 flex flex-col gap-4">
+                @php
+                    $paySupplier = $this->payingSupplierId ? Supplier::query()->find($this->payingSupplierId) : null;
+                    $currentDue = (float) ($paySupplier?->due_balance ?? 0);
+                    $afterPay = max(0, $currentDue - (float) $this->payAmount);
+                @endphp
+
                 <div class="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
                     <p class="text-xs text-zinc-500 uppercase tracking-wider font-semibold">{{ __('Total Pending Accounts Payable') }}</p>
                     <p class="text-lg font-bold text-rose-600 mt-0.5">
-                        Rs {{ number_format(Supplier::query()->find($this->payingSupplierId)?->due_balance ?? 0, 2) }}
+                        Rs {{ number_format($currentDue, 2) }}
                     </p>
                 </div>
 
                 <flux:input wire:model="payAmount" :label="__('Remittance Amount Remitted (Rs)')" type="number" step="0.01" required />
+
+                <div class="flex items-center justify-between rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-xs">
+                    <span class="text-zinc-500 font-semibold">{{ __('Remaining Supplier Due') }}</span>
+                    <span class="font-bold text-rose-600">Rs {{ number_format($afterPay, 2) }}</span>
+                </div>
                 
                 <flux:select wire:model.live="payMethod" :label="__('Payment Method')">
                     <option value="cash">Cash Account</option>

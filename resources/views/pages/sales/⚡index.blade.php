@@ -33,6 +33,9 @@ new #[Title('Sales Receipts')] class extends Component
     public string $payDueMethod = 'cash';
     public string $payDueReference = '';
     public string $payDueDate = '';
+    public string $payDueChequeBank = '';
+    public string $payDueChequeNo = '';
+    public string $payDueChequeDate = '';
 
     // Detail view state
     public ?int $viewingSaleId = null;
@@ -274,6 +277,9 @@ new #[Title('Sales Receipts')] class extends Component
         $this->payDueMethod = 'cash';
         $this->payDueReference = '';
         $this->payDueDate = date('Y-m-d');
+        $this->payDueChequeBank = '';
+        $this->payDueChequeNo = '';
+        $this->payDueChequeDate = date('Y-m-d');
         $this->payDueModalOpen = true;
     }
 
@@ -281,8 +287,11 @@ new #[Title('Sales Receipts')] class extends Component
     {
         $this->validate([
             'payDueAmount' => 'required|numeric|min:0.01',
-            'payDueMethod' => 'required|string',
+            'payDueMethod' => 'required|in:cash,card,bank_transfer,cheque',
             'payDueDate' => 'required|date',
+            'payDueChequeBank' => 'nullable|string|max:100',
+            'payDueChequeNo' => 'nullable|string|max:100',
+            'payDueChequeDate' => 'required_if:payDueMethod,cheque|nullable|date',
         ]);
 
         $sale = Sale::query()->with('customer')->findOrFail($this->viewingSaleId);
@@ -292,18 +301,29 @@ new #[Title('Sales Receipts')] class extends Component
             return;
         }
 
+        $isCheque = $this->payDueMethod === 'cheque';
+
         $payment = $sale->payments()->create([
             'amount' => $this->payDueAmount,
             'payment_method' => $this->payDueMethod,
             'date' => $this->payDueDate,
-            'reference' => $this->payDueReference,
-            'notes' => 'Due payment received',
+            'reference' => $isCheque ? ($this->payDueChequeNo ?: $this->payDueReference) : $this->payDueReference,
+            'cheque_bank' => $isCheque ? ($this->payDueChequeBank ?: null) : null,
+            'cheque_no' => $isCheque ? ($this->payDueChequeNo ?: null) : null,
+            'cheque_date' => $isCheque ? $this->payDueChequeDate : null,
+            'cheque_status' => $isCheque ? 'pending' : null,
+            'notes' => $isCheque ? 'Cheque payment on hold until cleared.' : 'Due payment received',
         ]);
 
         $sale->decrement('due_amount', $this->payDueAmount);
-        $sale->increment('paid_amount', $this->payDueAmount);
-        
-        if ($sale->due_amount <= 0) {
+
+        if (! $isCheque) {
+            $sale->increment('paid_amount', $this->payDueAmount);
+        }
+
+        if ($isCheque) {
+            $sale->update(['payment_status' => 'cheque_pending']);
+        } elseif ($sale->due_amount <= 0) {
             $sale->update(['payment_status' => 'paid']);
         } else {
             $sale->update(['payment_status' => 'partial']);
@@ -1001,14 +1021,33 @@ new #[Title('Sales Receipts')] class extends Component
                     <flux:input type="number" step="0.01" wire:model="payDueAmount" @input="val = $event.target.value" :label="__('Amount (Rs)')" required />
                 </div>
 
-                <flux:select wire:model="payDueMethod" :label="__('Payment Mode')">
+                <flux:select wire:model.live="payDueMethod" :label="__('Payment Mode')">
                     <option value="cash">Cash</option>
                     <option value="card">Card / POS</option>
                     <option value="bank_transfer">Bank Transfer</option>
                     <option value="cheque">Cheque</option>
                 </flux:select>
 
-                <flux:input wire:model="payDueReference" :label="__('Reference / Notes (Optional)')" placeholder="Txn ID or remarks..." />
+                @if ($payDueMethod === 'cheque')
+                    <div class="rounded-2xl border border-amber-100 bg-amber-50/40 p-4">
+                        <div class="flex items-center gap-2 text-amber-700">
+                            <flux:icon.banknotes class="size-4" />
+                            <p class="text-xs font-black uppercase tracking-wider">{{ __('Cheque Details') }}</p>
+                        </div>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                            <flux:input wire:model="payDueChequeBank" :label="__('Bank (optional)')" placeholder="Bank name" />
+                            <flux:input wire:model="payDueChequeNo" :label="__('Cheque No (optional)')" placeholder="Cheque number" />
+                        </div>
+                        <div class="mt-3">
+                            <flux:input wire:model="payDueChequeDate" :label="__('Cheque Date')" type="date" required />
+                        </div>
+                        <p class="mt-3 text-xs font-semibold text-amber-800">
+                            {{ __('Cheque payments stay on hold until marked passed. If still pending 7 days after the cheque date, the system marks it passed automatically when POS opens.') }}
+                        </p>
+                    </div>
+                @else
+                    <flux:input wire:model="payDueReference" :label="__('Reference / Notes (Optional)')" placeholder="Txn ID or remarks..." />
+                @endif
 
                 <flux:button type="submit" variant="primary" class="w-full mt-2">
                     <flux:icon.banknotes class="size-4 mr-2" />

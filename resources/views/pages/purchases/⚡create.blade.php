@@ -5,6 +5,7 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\Purchase;
 use App\Models\Supplier;
+use App\Models\Unit;
 use App\Services\ActivityLogger;
 use App\Services\TextItSmsService;
 use Flux\Flux;
@@ -12,6 +13,7 @@ use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 new #[Title('Record Wholesale Purchase')] class extends Component
 {
@@ -22,6 +24,20 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     // Cart and item search state
     public string $productSearch = '';
     public array $cart = [];
+
+    // Quick product create state
+    public bool $productCreateOpen = false;
+    public string $newProductName = '';
+    public string $newProductSku = '';
+    public ?string $newProductBarcode = null;
+    public ?int $newProductCategoryId = null;
+    public ?int $newProductBrandId = null;
+    public ?int $newProductUnitId = null;
+    public ?string $newProductCompatibleModels = null;
+    public $newProductCostPrice = 0.0;
+    public $newProductSellingPrice = 0.0;
+    public $newProductWholesalePrice = null;
+    public int $newProductMinimumStock = 0;
 
     // Payment and discounts state
     public $discount = 0.00;
@@ -103,6 +119,92 @@ new #[Title('Record Wholesale Purchase')] class extends Component
             $this->cart = array_values($this->cart);
             $this->syncAutoPaidAmount();
         }
+    }
+
+    public function openProductModal(): void
+    {
+        $this->productCreateOpen = true;
+    }
+
+    public function closeProductModal(): void
+    {
+        $this->resetNewProductForm();
+        $this->productCreateOpen = false;
+    }
+
+    public function saveNewProduct(): void
+    {
+        $this->prepareNewProductFields();
+
+        $this->validate([
+            'newProductName' => 'required|string|max:180',
+            'newProductCategoryId' => 'nullable|integer|exists:categories,id',
+            'newProductBrandId' => 'nullable|integer|exists:brands,id',
+            'newProductUnitId' => 'nullable|integer|exists:units,id',
+            'newProductSku' => ['required', 'string', 'max:64', Rule::unique(Product::class, 'sku')],
+            'newProductBarcode' => ['nullable', 'string', 'max:64', Rule::unique(Product::class, 'barcode')],
+            'newProductCompatibleModels' => 'nullable|string|max:255',
+            'newProductCostPrice' => 'required|numeric|min:0',
+            'newProductSellingPrice' => 'required|numeric|min:0',
+            'newProductWholesalePrice' => 'nullable|numeric|min:0',
+            'newProductMinimumStock' => 'nullable|integer|min:0',
+        ]);
+
+        $product = Product::query()->create([
+            'category_id' => $this->newProductCategoryId,
+            'brand_id' => $this->newProductBrandId,
+            'unit_id' => $this->newProductUnitId,
+            'name' => $this->newProductName,
+            'sku' => $this->newProductSku,
+            'barcode' => $this->newProductBarcode ?: null,
+            'compatible_models' => $this->newProductCompatibleModels ?: null,
+            'cost_price' => (float) $this->newProductCostPrice,
+            'selling_price' => (float) $this->newProductSellingPrice,
+            'wholesale_price' => ($this->newProductWholesalePrice !== null && $this->newProductWholesalePrice !== '')
+                ? (float) $this->newProductWholesalePrice
+                : null,
+            'stock_quantity' => 0,
+            'minimum_stock' => (int) $this->newProductMinimumStock,
+            'warranty_enabled' => false,
+            'warranty_period_days' => null,
+            'is_active' => true,
+        ]);
+
+        $this->selectProduct($product->id);
+        Flux::toast(variant: 'success', text: __('Product added.'));
+
+        $this->resetNewProductForm();
+        $this->productCreateOpen = false;
+    }
+
+    private function prepareNewProductFields(): void
+    {
+        $this->newProductSku = trim($this->newProductSku);
+
+        if ($this->newProductSku === '') {
+            $this->newProductSku = strtoupper(uniqid('SKU-'));
+        }
+
+        if ($this->newProductBarcode === null || trim((string) $this->newProductBarcode) === '') {
+            $this->newProductBarcode = $this->newProductSku;
+        }
+    }
+
+    private function resetNewProductForm(): void
+    {
+        $this->reset(
+            'newProductName',
+            'newProductSku',
+            'newProductBarcode',
+            'newProductCategoryId',
+            'newProductBrandId',
+            'newProductUnitId',
+            'newProductCompatibleModels',
+            'newProductCostPrice',
+            'newProductSellingPrice',
+            'newProductWholesalePrice',
+            'newProductMinimumStock'
+        );
     }
 
     public function updatedPaymentMethod(): void
@@ -245,6 +347,33 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     }
 
     #[Computed]
+    public function categories()
+    {
+        return Category::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    #[Computed]
+    public function brands()
+    {
+        return Brand::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    #[Computed]
+    public function units()
+    {
+        return Unit::query()
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+    }
+
+    #[Computed]
     public function products()
     {
         if (empty($this->productSearch)) return [];
@@ -353,8 +482,12 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
             <!-- Cart Section -->
             <div class="app-card p-5 flex flex-col gap-4">
-                <div class="flex flex-col gap-1 border-b border-zinc-100 pb-3">
+                <div class="flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
                     <h3 class="font-display text-sm font-semibold text-zinc-900">{{ __('Invoice Restock Catalog Items') }}</h3>
+                    <flux:button type="button" variant="ghost" size="sm" wire:click="openProductModal">
+                        <flux:icon.plus class="size-4 mr-1 text-zinc-400" />
+                        {{ __('Add Product') }}
+                    </flux:button>
                 </div>
 
                 <!-- Product Autocomplete Search -->
@@ -577,3 +710,59 @@ new #[Title('Record Wholesale Purchase')] class extends Component
         </div>
     </div>
 </div>
+
+<flux:modal wire:model.self="productCreateOpen">
+    <div class="w-full max-w-3xl space-y-4">
+        <div>
+            <h3 class="font-display text-lg font-semibold text-zinc-950">{{ __('Add new product') }}</h3>
+            <p class="mt-1 text-sm text-zinc-500">{{ __('Create a product without stock quantity. You can set the minimum stock alert here.') }}</p>
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <flux:input wire:model="newProductName" :label="__('Product name')" required />
+            <flux:input wire:model="newProductSku" :label="__('SKU / Code')" placeholder="Leave blank to auto-generate" />
+            <flux:input wire:model="newProductBarcode" :label="__('Barcode')" placeholder="Leave blank to sync with SKU" />
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <flux:select wire:model="newProductCategoryId" :label="__('Category')">
+                <flux:select.option value="">{{ __('Uncategorized') }}</flux:select.option>
+                @foreach ($this->categories as $category)
+                    <flux:select.option :value="$category->id">{{ $category->name }}</flux:select.option>
+                @endforeach
+            </flux:select>
+            <flux:select wire:model="newProductBrandId" :label="__('Brand')">
+                <flux:select.option value="">{{ __('No brand') }}</flux:select.option>
+                @foreach ($this->brands as $brand)
+                    <flux:select.option :value="$brand->id">{{ $brand->name }}</flux:select.option>
+                @endforeach
+            </flux:select>
+            <flux:select wire:model="newProductUnitId" :label="__('Unit')">
+                <flux:select.option value="">{{ __('No unit') }}</flux:select.option>
+                @foreach ($this->units as $unit)
+                    <flux:select.option :value="$unit->id">{{ $unit->name }}</flux:select.option>
+                @endforeach
+            </flux:select>
+            <flux:input wire:model="newProductCompatibleModels" :label="__('Compatible models')" />
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-3">
+            <flux:input wire:model="newProductCostPrice" type="number" step="0.01" :label="__('Cost price')" required />
+            <flux:input wire:model="newProductSellingPrice" @input="$wire.set('newProductWholesalePrice', $event.target.value)" type="number" step="0.01" :label="__('Selling price')" required />
+            <flux:input wire:model="newProductWholesalePrice" type="number" step="0.01" :label="__('Wholesale price')" />
+        </div>
+
+        <div class="grid gap-4 sm:grid-cols-2">
+            <flux:input wire:model="newProductMinimumStock" type="number" min="0" :label="__('Minimum stock alert')" />
+        </div>
+
+        <div class="flex justify-end gap-2">
+            <flux:button type="button" variant="ghost" wire:click="closeProductModal">
+                {{ __('Cancel') }}
+            </flux:button>
+            <flux:button type="button" variant="primary" wire:click="saveNewProduct">
+                {{ __('Save product') }}
+            </flux:button>
+        </div>
+    </div>
+</flux:modal>

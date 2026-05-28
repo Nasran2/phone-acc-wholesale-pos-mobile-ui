@@ -333,3 +333,107 @@ test('party supplier payoff cheque return makes customer due and restores suppli
         ->and((float) $customer->refresh()->due_balance)->toBe(1000.0)
         ->and((float) $supplier->refresh()->due_balance)->toBe(1000.0);
 });
+
+test('customer due cheques appear in dashboard follow-up list', function () {
+    $customer = Customer::query()->create([
+        'name' => 'Customer Due Cheque',
+        'phone' => '0778888888',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $customer->payments()->create([
+        'amount' => 300,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'CUST-CHQ-100',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'CUST-CHQ-100',
+        'cheque_date' => today()->addDays(2)->toDateString(),
+        'cheque_status' => 'pending',
+        'cheque_type' => 'own',
+    ]);
+
+    $cheques = app(ChequePaymentService::class)->actionablePendingCheques(today());
+
+    expect($cheques->pluck('id'))->toContain($payment->id);
+});
+
+test('returning customer due cheque restores due balance', function () {
+    $customer = Customer::query()->create([
+        'name' => 'Customer Due Return',
+        'phone' => '0779999999',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $customer->payments()->create([
+        'amount' => 500,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'CUST-CHQ-RET',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'CUST-CHQ-RET',
+        'cheque_date' => today()->addDays(2)->toDateString(),
+        'cheque_status' => 'pending',
+        'cheque_type' => 'own',
+    ]);
+
+    app(ChequePaymentService::class)->markReturned($payment);
+
+    expect($payment->refresh()->cheque_status)->toBe('returned')
+        ->and((float) $customer->refresh()->due_balance)->toBe(500.0);
+});
+
+test('sales due payment can be recorded as a cheque hold', function () {
+    $user = User::factory()->create([
+        'role' => 'super_admin',
+        'is_active' => true,
+    ]);
+    $customer = Customer::query()->create([
+        'name' => 'Sales Due Cheque Customer',
+        'phone' => '0771010101',
+        'opening_balance' => 0,
+        'due_balance' => 600,
+    ]);
+    $sale = Sale::query()->create([
+        'customer_id' => $customer->id,
+        'invoice_no' => 'INV-DUE-CHQ-100',
+        'date' => today()->toDateString(),
+        'subtotal_amount' => 1000,
+        'discount_amount' => 0,
+        'tax_amount' => 0,
+        'grand_total' => 1000,
+        'paid_amount' => 400,
+        'due_amount' => 600,
+        'payment_status' => 'partial',
+        'profit' => 250,
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::sales.index')
+        ->call('viewInvoice', $sale->id)
+        ->call('openPayDueModal')
+        ->set('payDueAmount', 600)
+        ->set('payDueMethod', 'cheque')
+        ->set('payDueDate', today()->toDateString())
+        ->set('payDueChequeBank', 'BOC')
+        ->set('payDueChequeNo', 'DUE-CHQ-100')
+        ->set('payDueChequeDate', today()->addDays(2)->toDateString())
+        ->call('submitPayDue')
+        ->assertHasNoErrors();
+
+    $payment = Payment::query()
+        ->where('paymentable_type', Sale::class)
+        ->where('paymentable_id', $sale->id)
+        ->latest('id')
+        ->firstOrFail();
+
+    expect($payment->payment_method)->toBe('cheque')
+        ->and($payment->cheque_status)->toBe('pending')
+        ->and($payment->cheque_no)->toBe('DUE-CHQ-100')
+        ->and($sale->refresh()->payment_status)->toBe('cheque_pending')
+        ->and((float) $sale->due_amount)->toBe(0.0)
+        ->and((float) $sale->paid_amount)->toBe(400.0)
+        ->and((float) $customer->refresh()->due_balance)->toBe(0.0);
+});

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Customer;
 use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Sale;
@@ -28,6 +29,11 @@ class ChequePaymentService
             $sale = $payment->paymentable;
             if ($sale instanceof Sale) {
                 $this->applyPassedChequeToSale($sale, (float) $payment->amount);
+            }
+
+            $customer = $payment->paymentable;
+            if ($customer instanceof Customer) {
+                // Customer due balance already reduced on cheque creation; no extra sync needed.
             }
 
             $purchase = $payment->paymentable;
@@ -101,6 +107,13 @@ class ChequePaymentService
                 $this->syncSaleStatus($sale);
             }
 
+            $customer = $payment->paymentable;
+            if ($customer instanceof Customer) {
+                $customer->update([
+                    'due_balance' => round(max(0, (float) $customer->due_balance + (float) $payment->amount), 2),
+                ]);
+            }
+
             $purchase = $payment->paymentable;
             if ($purchase instanceof Purchase) {
                 $this->syncPurchaseStatus($purchase);
@@ -138,9 +151,9 @@ class ChequePaymentService
 
         Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
             ->whereDate('cheque_date', '<=', $cutoff)
-            ->with('paymentable.customer')
+            ->with('paymentable')
             ->orderBy('cheque_date')
             ->each(function (Payment $payment) use (&$processed) {
                 $this->pass($payment);
@@ -180,10 +193,10 @@ class ChequePaymentService
 
         $customerCheques = Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
             ->whereDoesntHave('issuedPayments', fn ($query) => $query->where('cheque_status', 'pending'))
             ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString())
-            ->with('paymentable.customer')
+            ->with('paymentable')
             ->orderBy('cheque_date')
             ->orderBy('id')
             ->get();

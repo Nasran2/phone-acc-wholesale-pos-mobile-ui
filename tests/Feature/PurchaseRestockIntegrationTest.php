@@ -44,6 +44,27 @@ test('purchases create page auto-populates cart with product_id from query param
         ->assertSet('cart.0.selling_price', 25.00);
 });
 
+test('purchases create can add a new product with minimum stock alert', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+
+    $component = Livewire::actingAs($user)
+        ->test('pages::purchases.create')
+        ->set('newProductName', 'Quick Stock Cable')
+        ->set('newProductCostPrice', 90)
+        ->set('newProductSellingPrice', 150)
+        ->set('newProductWholesalePrice', 150)
+        ->set('newProductMinimumStock', 5)
+        ->call('saveNewProduct')
+        ->assertHasNoErrors();
+
+    $product = Product::query()->where('name', 'Quick Stock Cable')->firstOrFail();
+
+    $component->assertSet('cart.0.product_id', $product->id);
+
+    expect((int) $product->stock_quantity)->toBe(0)
+        ->and((int) $product->minimum_stock)->toBe(5);
+});
+
 test('suppliers list page auto-opens ledger drawer when supplier_id is passed', function () {
     $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
     $supplier = Supplier::query()->create([

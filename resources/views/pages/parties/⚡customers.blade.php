@@ -33,6 +33,9 @@ new #[Title('Manage Customers')] class extends Component
     public string $payReference = '';
     public string $payNotes = '';
     public string $payDate = '';
+    public string $payChequeBank = '';
+    public string $payChequeNo = '';
+    public string $payChequeDate = '';
 
     // Detail ledger statement state
     public ?int $selectedCustomerId = null;
@@ -167,16 +170,20 @@ new #[Title('Manage Customers')] class extends Component
         $this->payingCustomerId = $customer->id;
         $this->payAmount = (float) $customer->due_balance;
         $this->payDate = date('Y-m-d');
+        $this->payChequeDate = date('Y-m-d');
     }
 
     public function savePayment(TextItSmsService $smsService): void
     {
         $this->validate([
             'payAmount' => 'required|numeric|min:0.01',
-            'payMethod' => 'required|string',
+            'payMethod' => 'required|in:cash,card,bank_transfer,qr,cheque',
             'payDate'   => 'required|date',
             'payReference' => 'nullable|string',
             'payNotes' => 'nullable|string',
+            'payChequeBank' => 'nullable|string|max:100',
+            'payChequeNo' => 'nullable|string|max:100',
+            'payChequeDate' => 'required_if:payMethod,cheque|nullable|date',
         ]);
 
         $customer = Customer::query()->findOrFail($this->payingCustomerId);
@@ -191,8 +198,14 @@ new #[Title('Manage Customers')] class extends Component
             'amount' => (float) $this->payAmount,
             'payment_method' => $this->payMethod,
             'date' => $this->payDate ?: date('Y-m-d'),
-            'reference' => $this->payReference,
-            'notes' => $this->payNotes ?: 'Dues received from Customer Account Ledger.',
+            'reference' => $this->payMethod === 'cheque' ? ($this->payChequeNo ?: $this->payReference) : $this->payReference,
+            'cheque_bank' => $this->payMethod === 'cheque' ? ($this->payChequeBank ?: null) : null,
+            'cheque_no' => $this->payMethod === 'cheque' ? ($this->payChequeNo ?: null) : null,
+            'cheque_date' => $this->payMethod === 'cheque' ? $this->payChequeDate : null,
+            'cheque_status' => $this->payMethod === 'cheque' ? 'pending' : null,
+            'notes' => $this->payMethod === 'cheque'
+                ? 'Cheque payment on hold until cleared.'
+                : ($this->payNotes ?: 'Dues received from Customer Account Ledger.'),
         ]);
 
         // 2. Adjust customer outstanding due balance
@@ -219,7 +232,7 @@ new #[Title('Manage Customers')] class extends Component
 
     public function resetPaymentForm(): void
     {
-        $this->reset('payingCustomerId', 'payAmount', 'payMethod', 'payReference', 'payNotes', 'payDate');
+        $this->reset('payingCustomerId', 'payAmount', 'payMethod', 'payReference', 'payNotes', 'payDate', 'payChequeBank', 'payChequeNo', 'payChequeDate');
     }
 
     public function resetForm(): void
@@ -1151,15 +1164,35 @@ new #[Title('Manage Customers')] class extends Component
                 />
 
                 {{-- Method --}}
-                <flux:select wire:model="payMethod" :label="__('Payment Method')">
+                <flux:select wire:model.live="payMethod" :label="__('Payment Method')">
                     <option value="cash">Cash Account</option>
                     <option value="card">Credit / Debit Card</option>
                     <option value="bank_transfer">Direct Bank Deposit</option>
                     <option value="qr">LankaQR / QR Scan</option>
+                    <option value="cheque">Cheque Payment Hold</option>
                 </flux:select>
 
-                {{-- Reference --}}
-                <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Cheque / TxID)')" />
+                @if ($payMethod === 'cheque')
+                    <div class="rounded-2xl border border-amber-100 bg-amber-50/40 p-4">
+                        <div class="flex items-center gap-2 text-amber-700">
+                            <flux:icon.banknotes class="size-4" />
+                            <p class="text-xs font-black uppercase tracking-wider">{{ __('Cheque Details') }}</p>
+                        </div>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                            <flux:input wire:model="payChequeBank" :label="__('Bank (optional)')" placeholder="Bank name" />
+                            <flux:input wire:model="payChequeNo" :label="__('Cheque No (optional)')" placeholder="Cheque number" />
+                        </div>
+                        <div class="mt-3">
+                            <flux:input wire:model="payChequeDate" :label="__('Cheque Date')" type="date" required />
+                        </div>
+                        <p class="mt-3 text-xs font-semibold text-amber-800">
+                            {{ __('Cheque payments stay on hold until marked passed. If still pending 7 days after the cheque date, the system marks it passed automatically when POS opens.') }}
+                        </p>
+                    </div>
+                @else
+                    {{-- Reference --}}
+                    <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Cheque / TxID)')" />
+                @endif
 
                 {{-- Notes --}}
                 <flux:textarea wire:model="payNotes" :label="__('Payment Ledger Notes')" rows="2" placeholder="Dues collection payment." />
