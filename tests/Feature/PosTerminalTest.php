@@ -233,9 +233,12 @@ test('a4 invoice uses the branded print layout and developer footer', function (
         ->call('submitCheckout')
         ->assertHasNoErrors()
         ->assertSee('Invoice')
+        ->assertSee('Retail Bill')
         ->assertSee('Bill to')
         ->assertSee('Quantity')
         ->assertSee('Invoice Number')
+        ->assertDontSee('Tax Invoice')
+        ->assertDontSee('Sales Tax')
         ->assertSee('Powered by Twinsofte.com');
 });
 

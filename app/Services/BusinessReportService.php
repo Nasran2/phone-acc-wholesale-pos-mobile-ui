@@ -452,6 +452,10 @@ class BusinessReportService
             ->whereDate('date', '>=', $startDate)
             ->whereDate('date', '<=', $endDate)
             ->whereHasMorph('paymentable', [Supplier::class, Purchase::class])
+            ->where(function ($query): void {
+                $query->where('payment_method', '!=', 'cheque')
+                    ->orWhere('cheque_status', 'passed');
+            })
             ->when($paymentMethod !== 'all', fn ($query) => $query->where('payment_method', $paymentMethod))
             ->when($search, fn ($query, string $term) => $this->paymentSearch($query, $term))
             ->latest('date')

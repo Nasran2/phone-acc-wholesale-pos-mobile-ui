@@ -32,6 +32,11 @@ new #[Title('Manage Suppliers')] class extends Component
     public string $payMethod = 'cash';
     public string $payReference = '';
     public string $payNotes = '';
+    public string $payChequeNo = '';
+    public string $payChequeBank = '';
+    public string $payChequeDate = '';
+    public string $payPartyChequeSearch = '';
+    public ?int $payPartyChequePaymentId = null;
 
     // Detail ledger statement state
     public ?int $selectedSupplierId = null;
@@ -133,31 +138,96 @@ new #[Title('Manage Suppliers')] class extends Component
         $supplier = Supplier::query()->findOrFail($id);
         $this->payingSupplierId = $supplier->id;
         $this->payAmount = (float) $supplier->due_balance;
+        $this->payChequeDate = today()->toDateString();
+    }
+
+    public function updatedPayMethod(): void
+    {
+        if (! in_array($this->payMethod, ['own_cheque', 'party_cheque'], true)) {
+            $this->payChequeNo = '';
+            $this->payChequeBank = '';
+            $this->payChequeDate = '';
+            $this->payPartyChequeSearch = '';
+            $this->payPartyChequePaymentId = null;
+
+            return;
+        }
+
+        $this->payChequeDate = today()->toDateString();
+
+        if ($this->payMethod === 'own_cheque') {
+            $this->payReference = $this->latestSupplierBillNumber();
+        }
     }
 
     public function savePayment(): void
     {
         $this->validate([
             'payAmount' => 'required|numeric|min:0.01',
-            'payMethod' => 'required|string',
-            'payReference' => 'nullable|string',
-            'payNotes' => 'nullable|string',
+            'payMethod' => 'required|in:cash,card,bank_transfer,qr,own_cheque,party_cheque',
+            'payReference' => 'nullable|string|max:120',
+            'payNotes' => 'nullable|string|max:500',
+            'payChequeNo' => 'required_if:payMethod,own_cheque|nullable|string|max:100',
+            'payChequeBank' => 'nullable|string|max:100',
+            'payChequeDate' => 'required_if:payMethod,own_cheque|nullable|date',
+            'payPartyChequePaymentId' => 'required_if:payMethod,party_cheque|nullable|exists:payments,id',
         ]);
 
         $supplier = Supplier::query()->findOrFail($this->payingSupplierId);
+
+        $isOwnCheque = $this->payMethod === 'own_cheque';
+        $isPartyCheque = $this->payMethod === 'party_cheque';
+        $isCheque = $isOwnCheque || $isPartyCheque;
 
         if ((float) $this->payAmount > $supplier->due_balance) {
             Flux::toast(variant: 'danger', text: __('Payment amount exceeds total outstanding due.'));
             return;
         }
 
+        $partyCheque = $this->selectedPayPartyCheque;
+
+        if ($isPartyCheque) {
+            if (! $partyCheque) {
+                $this->addError('payPartyChequePaymentId', __('Please select a customer cheque.'));
+
+                return;
+            }
+
+            if ((float) $this->payAmount > (float) $partyCheque->amount) {
+                $this->addError('payAmount', __('Party cheque amount cannot exceed the selected customer cheque amount.'));
+
+                return;
+            }
+        }
+
         // 1. Log polymorphic payment transaction
         $supplier->payments()->create([
             'amount' => (float) $this->payAmount,
-            'payment_method' => $this->payMethod,
+            'payment_method' => $isCheque ? 'cheque' : $this->payMethod,
             'date' => date('Y-m-d'),
-            'reference' => $this->payReference,
-            'notes' => $this->payNotes ?: 'Dues paid to Supplier Account Ledger.',
+            'reference' => $isCheque
+                ? ($isPartyCheque ? ($partyCheque?->cheque_no ?: $partyCheque?->reference) : $this->payChequeNo)
+                : $this->payReference,
+            'cheque_bank' => $isCheque
+                ? ($isPartyCheque ? $partyCheque?->cheque_bank : $this->payChequeBank)
+                : null,
+            'cheque_no' => $isCheque
+                ? ($isPartyCheque ? $partyCheque?->cheque_no : $this->payChequeNo)
+                : null,
+            'cheque_date' => $isCheque
+                ? ($isPartyCheque ? $partyCheque?->cheque_date : $this->payChequeDate)
+                : null,
+            'cheque_status' => $isCheque ? 'pending' : null,
+            'cheque_type' => $isCheque ? ($isPartyCheque ? 'party' : 'own') : null,
+            'source_payment_id' => $isPartyCheque ? $partyCheque?->id : null,
+            'party_customer_id' => $isPartyCheque
+                ? $partyCheque?->paymentable?->customer_id
+                : null,
+            'notes' => $isCheque
+                ? ($isPartyCheque
+                    ? 'Supplier payoff with party cheque on hold until cleared.'
+                    : 'Supplier cheque payoff on hold until cleared.')
+                : ($this->payNotes ?: 'Dues paid to Supplier Account Ledger.'),
         ]);
 
         // 2. Adjust supplier outstanding due balance
@@ -171,7 +241,18 @@ new #[Title('Manage Suppliers')] class extends Component
 
     public function resetPaymentForm(): void
     {
-        $this->reset('payingSupplierId', 'payAmount', 'payMethod', 'payReference', 'payNotes');
+        $this->reset(
+            'payingSupplierId',
+            'payAmount',
+            'payMethod',
+            'payReference',
+            'payNotes',
+            'payChequeNo',
+            'payChequeBank',
+            'payChequeDate',
+            'payPartyChequeSearch',
+            'payPartyChequePaymentId'
+        );
     }
 
     public function resetForm(): void
@@ -228,11 +309,74 @@ new #[Title('Manage Suppliers')] class extends Component
                 'description' => "Payoff Remitted (" . strtoupper($pm->payment_method) . ")",
                 'credit' => 0,
                 'debit' => $pm->amount,
+                'cheque_status' => $pm->payment_method === 'cheque' ? $pm->cheque_status : null,
                 'raw_date' => $pm->created_at,
             ]);
 
         // Merge and sort chronologically
         return $purchases->concat($payments)->sortBy('raw_date')->values()->all();
+    }
+
+    #[Computed]
+    public function payPartyCheques()
+    {
+        if (blank($this->payPartyChequeSearch)) {
+            return [];
+        }
+
+        return Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->whereDoesntHave('issuedPayments', fn ($query) => $query->where('cheque_status', 'pending'))
+            ->where(function ($query): void {
+                $query->where('cheque_no', 'like', '%'.$this->payPartyChequeSearch.'%')
+                    ->orWhere('reference', 'like', '%'.$this->payPartyChequeSearch.'%')
+                    ->orWhereHasMorph('paymentable', [\App\Models\Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'));
+            })
+            ->with('paymentable.customer')
+            ->limit(5)
+            ->get();
+    }
+
+    private function latestSupplierBillNumber(): string
+    {
+        if (! $this->payingSupplierId) {
+            return '';
+        }
+
+        return (string) Purchase::query()
+            ->where('supplier_id', $this->payingSupplierId)
+            ->where('due_amount', '>', 0)
+            ->latest('date')
+            ->value('invoice_no');
+    }
+
+    #[Computed]
+    public function selectedPayPartyCheque()
+    {
+        if (! $this->payPartyChequePaymentId) {
+            return null;
+        }
+
+        return Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->with('paymentable.customer')
+            ->find($this->payPartyChequePaymentId);
+    }
+
+    public function selectPayPartyCheque(int $paymentId): void
+    {
+        $payment = Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->with('paymentable.customer')
+            ->findOrFail($paymentId);
+
+        $this->payPartyChequePaymentId = $payment->id;
+        $this->payPartyChequeSearch = $payment->cheque_no ?: (string) $payment->reference;
+        $this->payChequeType = 'party';
+        $this->payAmount = min((float) $payment->amount, (float) $this->payAmount);
     }
 }; ?>
 
@@ -350,7 +494,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                 <flux:button variant="ghost" size="sm" wire:click="viewLedger({{ $s->id }})">
                                     Ledger
                                 </flux:button>
-                                
+
                                 @if ($s->due_balance > 0)
                                     <flux:button variant="ghost" size="sm" class="text-emerald-600 hover:text-emerald-700" wire:click="initiatePayment({{ $s->id }})">
                                         Payoff
@@ -441,7 +585,20 @@ new #[Title('Manage Suppliers')] class extends Component
                             <div class="flex items-start justify-between">
                                 <div>
                                     <span class="text-xs text-zinc-400">{{ $row['date']->format('Y-m-d') }}</span>
-                                    <h5 class="text-sm font-semibold text-zinc-900 mt-0.5">{{ $row['ref'] }}</h5>
+                                    <div class="mt-0.5 flex flex-wrap items-center gap-2">
+                                        <h5 class="text-sm font-semibold text-zinc-900">{{ $row['ref'] }}</h5>
+                                        @if (! empty($row['cheque_status']))
+                                            <span @class([
+                                                'text-[9px] font-black uppercase tracking-wider rounded-full px-2 py-0.5',
+                                                'bg-amber-100/60 text-amber-700' => $row['cheque_status'] === 'pending',
+                                                'bg-emerald-100/70 text-emerald-700' => $row['cheque_status'] === 'passed',
+                                                'bg-rose-100/70 text-rose-700' => $row['cheque_status'] === 'returned',
+                                                'bg-zinc-100 text-zinc-600' => ! in_array($row['cheque_status'], ['pending', 'passed', 'returned'], true),
+                                            ])>
+                                                {{ str($row['cheque_status'])->replace('_', ' ')->headline() }}
+                                            </span>
+                                        @endif
+                                    </div>
                                 </div>
                                 <div class="text-right">
                                     @if ($row['credit'] > 0)
@@ -493,23 +650,87 @@ new #[Title('Manage Suppliers')] class extends Component
             </div>
 
             <form wire:submit="savePayment" class="mt-4 flex flex-col gap-4">
+                @php
+                    $paySupplier = $this->payingSupplierId ? Supplier::query()->find($this->payingSupplierId) : null;
+                    $currentDue = (float) ($paySupplier?->due_balance ?? 0);
+                    $afterPay = max(0, $currentDue - (float) $this->payAmount);
+                @endphp
+
                 <div class="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
                     <p class="text-xs text-zinc-500 uppercase tracking-wider font-semibold">{{ __('Total Pending Accounts Payable') }}</p>
                     <p class="text-lg font-bold text-rose-600 mt-0.5">
-                        Rs {{ number_format(Supplier::query()->find($this->payingSupplierId)?->due_balance ?? 0, 2) }}
+                        Rs {{ number_format($currentDue, 2) }}
                     </p>
                 </div>
 
                 <flux:input wire:model="payAmount" :label="__('Remittance Amount Remitted (Rs)')" type="number" step="0.01" required />
-                
-                <flux:select wire:model="payMethod" :label="__('Payment Method')">
+
+                <div class="flex items-center justify-between rounded-2xl border border-zinc-100 bg-zinc-50 px-4 py-3 text-xs">
+                    <span class="text-zinc-500 font-semibold">{{ __('Remaining Supplier Due') }}</span>
+                    <span class="font-bold text-rose-600">Rs {{ number_format($afterPay, 2) }}</span>
+                </div>
+
+                <flux:select wire:model.live="payMethod" :label="__('Payment Method')">
                     <option value="cash">Cash Account</option>
                     <option value="card">Credit / Debit Card</option>
                     <option value="bank_transfer">Direct Bank Deposit</option>
                     <option value="qr">LankaQR / QR Scan</option>
+                    <option value="own_cheque">Own Cheque</option>
+                    <option value="party_cheque">Party Cheque</option>
                 </flux:select>
 
-                <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Bank Deposit Slip / TxID)')" />
+                @if ($payMethod === 'own_cheque')
+                    <flux:input wire:model="payReference" :label="__('Bill No')" readonly />
+                    <div class="grid gap-3 sm:grid-cols-2">
+                        <flux:input wire:model="payChequeNo" :label="__('Cheque No')" placeholder="Cheque number" required />
+                        <flux:input wire:model="payChequeBank" :label="__('Bank')" placeholder="Bank name" />
+                    </div>
+                    <flux:input wire:model="payChequeDate" :label="__('Cheque Date')" type="date" required />
+                    <p class="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                        {{ __('Own cheques are shown on the dashboard from 3 days before the cheque date and become cash out when marked passed.') }}
+                    </p>
+                @elseif ($payMethod === 'party_cheque')
+                    <div class="relative" x-data="{ open: false }" @click.away="open = false">
+                        <flux:input wire:model.live.debounce.150ms="payPartyChequeSearch" :label="__('Customer Bill No / Cheque No')" placeholder="Search customer bill or cheque..." @focus="open = true" required />
+
+                        @if (count($this->payPartyCheques) > 0)
+                            <div x-cloak x-show="open" class="absolute z-40 mt-2 max-h-60 w-full overflow-y-auto rounded-2xl border border-zinc-100 bg-white p-2 shadow-xl">
+                                @foreach ($this->payPartyCheques as $partyCheque)
+                                    @php($partySale = $partyCheque->paymentable)
+                                    <button type="button" wire:click="selectPayPartyCheque({{ $partyCheque->id }})" @click="open = false" class="w-full rounded-xl p-3 text-left transition hover:bg-zinc-50">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <span class="text-sm font-bold text-zinc-900">{{ $partyCheque->cheque_no ?: $partyCheque->reference }}</span>
+                                            <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
+                                        </div>
+                                        <p class="mt-0.5 text-xs text-zinc-500">
+                                            {{ $partySale?->customer?->name ?? __('Unknown Customer') }} · {{ $partySale?->invoice_no }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                        </p>
+                                    </button>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+
+                    @if ($this->selectedPayPartyCheque)
+                        @php($selectedPartySale = $this->selectedPayPartyCheque->paymentable)
+                        <div class="rounded-2xl border border-violet-100 bg-violet-50 p-3 text-xs text-violet-900">
+                            <div class="flex items-center justify-between gap-3">
+                                <span class="font-black">{{ $this->selectedPayPartyCheque->cheque_no ?: $this->selectedPayPartyCheque->reference }}</span>
+                                <span class="font-black">Rs {{ number_format($this->selectedPayPartyCheque->amount, 2) }}</span>
+                            </div>
+                            <p class="mt-1 font-semibold">
+                                {{ $selectedPartySale?->customer?->name ?? __('Unknown Customer') }} · {{ __('Due') }} {{ $this->selectedPayPartyCheque->cheque_date?->format('Y-m-d') }}
+                            </p>
+                        </div>
+                    @endif
+
+                    <p class="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                        {{ __('Party cheques are shown separately on the dashboard from 2 days before the cheque date with supplier details and pass/return actions.') }}
+                    </p>
+                @else
+                    <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Bank Deposit Slip / TxID)')" />
+                @endif
+
                 <flux:textarea wire:model="payNotes" :label="__('Payment Ledger Notes')" rows="2" placeholder="Supplier dues payoff." />
 
                 <flux:button type="submit" variant="primary" class="w-full mt-2">

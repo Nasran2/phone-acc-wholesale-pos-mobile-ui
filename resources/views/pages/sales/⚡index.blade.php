@@ -33,6 +33,9 @@ new #[Title('Sales Receipts')] class extends Component
     public string $payDueMethod = 'cash';
     public string $payDueReference = '';
     public string $payDueDate = '';
+    public string $payDueChequeBank = '';
+    public string $payDueChequeNo = '';
+    public string $payDueChequeDate = '';
 
     // Detail view state
     public ?int $viewingSaleId = null;
@@ -68,7 +71,7 @@ new #[Title('Sales Receipts')] class extends Component
         }
 
         $sale = Sale::query()->with('items.product')->findOrFail($this->viewingSaleId);
-        
+
         $this->returnItems = [];
         foreach ($sale->items as $item) {
             // Check if already returned in other receipts, max return limit
@@ -160,7 +163,7 @@ new #[Title('Sales Receipts')] class extends Component
             // Decrement invoice due & customer account due
             $sale->decrement('due_amount', $adjustedAmount);
             $customer->decrement('due_balance', $adjustedAmount);
-            
+
             // Re-eval payment status
             $newDue = $sale->due_amount;
             if ($newDue <= 0) {
@@ -230,12 +233,12 @@ new #[Title('Sales Receipts')] class extends Component
     public function deleteSale(): void
     {
         $sale = Sale::query()->with(['items', 'returns.items'])->findOrFail($this->viewingSaleId);
-        
+
         $itemQuantities = [];
         foreach ($sale->items as $item) {
             $itemQuantities[$item->product_id] = $item->quantity;
         }
-        
+
         foreach ($sale->returns as $ret) {
             foreach ($ret->items as $retItem) {
                 if (isset($itemQuantities[$retItem->product_id])) {
@@ -243,7 +246,7 @@ new #[Title('Sales Receipts')] class extends Component
                 }
             }
         }
-        
+
         foreach ($itemQuantities as $productId => $qty) {
             if ($qty > 0) {
                 $product = Product::query()->find($productId);
@@ -252,7 +255,7 @@ new #[Title('Sales Receipts')] class extends Component
                 }
             }
         }
-        
+
         $sale->payments()->delete();
         foreach ($sale->returns as $ret) {
             $ret->items()->delete();
@@ -261,7 +264,7 @@ new #[Title('Sales Receipts')] class extends Component
         }
         $sale->items()->delete();
         $sale->delete();
-        
+
         ActivityLogger::log('sale_delete', "Deleted Sale {$sale->invoice_no} and restored inventory stock.");
         Flux::toast(variant: 'success', text: __('Sale deleted and stock rearranged successfully.'));
         $this->closeInvoice();
@@ -274,6 +277,9 @@ new #[Title('Sales Receipts')] class extends Component
         $this->payDueMethod = 'cash';
         $this->payDueReference = '';
         $this->payDueDate = date('Y-m-d');
+        $this->payDueChequeBank = '';
+        $this->payDueChequeNo = '';
+        $this->payDueChequeDate = date('Y-m-d');
         $this->payDueModalOpen = true;
     }
 
@@ -281,29 +287,43 @@ new #[Title('Sales Receipts')] class extends Component
     {
         $this->validate([
             'payDueAmount' => 'required|numeric|min:0.01',
-            'payDueMethod' => 'required|string',
+            'payDueMethod' => 'required|in:cash,card,bank_transfer,cheque',
             'payDueDate' => 'required|date',
+            'payDueChequeBank' => 'nullable|string|max:100',
+            'payDueChequeNo' => 'nullable|string|max:100',
+            'payDueChequeDate' => 'required_if:payDueMethod,cheque|nullable|date',
         ]);
 
         $sale = Sale::query()->with('customer')->findOrFail($this->viewingSaleId);
-        
+
         if ($this->payDueAmount > $sale->due_amount) {
             $this->addError('payDueAmount', 'Amount exceeds due balance.');
             return;
         }
 
+        $isCheque = $this->payDueMethod === 'cheque';
+
         $payment = $sale->payments()->create([
             'amount' => $this->payDueAmount,
             'payment_method' => $this->payDueMethod,
             'date' => $this->payDueDate,
-            'reference' => $this->payDueReference,
-            'notes' => 'Due payment received',
+            'reference' => $isCheque ? ($this->payDueChequeNo ?: $this->payDueReference) : $this->payDueReference,
+            'cheque_bank' => $isCheque ? ($this->payDueChequeBank ?: null) : null,
+            'cheque_no' => $isCheque ? ($this->payDueChequeNo ?: null) : null,
+            'cheque_date' => $isCheque ? $this->payDueChequeDate : null,
+            'cheque_status' => $isCheque ? 'pending' : null,
+            'notes' => $isCheque ? 'Cheque payment on hold until cleared.' : 'Due payment received',
         ]);
 
         $sale->decrement('due_amount', $this->payDueAmount);
-        $sale->increment('paid_amount', $this->payDueAmount);
-        
-        if ($sale->due_amount <= 0) {
+
+        if (! $isCheque) {
+            $sale->increment('paid_amount', $this->payDueAmount);
+        }
+
+        if ($isCheque) {
+            $sale->update(['payment_status' => 'cheque_pending']);
+        } elseif ($sale->due_amount <= 0) {
             $sale->update(['payment_status' => 'paid']);
         } else {
             $sale->update(['payment_status' => 'partial']);
@@ -391,9 +411,9 @@ new #[Title('Sales Receipts')] class extends Component
     }
 }; ?>
 
-<div class="flex flex-col gap-6" @payment-added.window="resetSharePdf()" x-data="{ 
-    drawerOpen: @entangle('viewingSaleId'), 
-    retModalOpen: @entangle('returnModalOpen'), 
+<div class="flex flex-col gap-6" @payment-added.window="resetSharePdf()" x-data="{
+    drawerOpen: @entangle('viewingSaleId'),
+    retModalOpen: @entangle('returnModalOpen'),
     payDueOpen: @entangle('payDueModalOpen'),
     shareCopied: false,
     sharePreparing: false,
@@ -468,28 +488,28 @@ new #[Title('Sales Receipts')] class extends Component
             wrapper.style.position = 'fixed';
             wrapper.style.top = '-9999px';
             wrapper.style.left = '-9999px';
-            
+
             if (isA4) {
                 wrapper.style.width = '794px';
                 wrapper.style.height = '1123px';
             } else {
-                wrapper.style.width = '300px'; 
+                wrapper.style.width = '300px';
             }
-            
+
             wrapper.style.background = 'white';
             wrapper.style.zIndex = '-1';
-            
+
             const clonedEl = originalEl.cloneNode(true);
             clonedEl.classList.remove('hidden', 'print:block');
             clonedEl.style.display = 'block';
-            
+
             if (isA4) {
                 clonedEl.style.width = '794px';
                 clonedEl.style.height = '1123px';
                 clonedEl.style.margin = '0';
                 clonedEl.style.padding = '0';
             }
-            
+
             wrapper.appendChild(clonedEl);
             document.body.appendChild(wrapper);
 
@@ -502,7 +522,7 @@ new #[Title('Sales Receipts')] class extends Component
                 width: isA4 ? 794 : 300,
                 height: isA4 ? 1123 : clonedEl.offsetHeight
             });
-            
+
             document.body.removeChild(wrapper);
 
             const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -511,12 +531,12 @@ new #[Title('Sales Receipts')] class extends Component
                 unit: 'mm',
                 format: isA4 ? 'a4' : [80, (canvas.height * 80) / canvas.width]
             });
-            
+
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            
+
             pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-            
+
             const pdfBlob = pdf.output('blob');
             this.sharePdfFile = new File([pdfBlob], `${invoiceNo}.pdf`, { type: 'application/pdf' });
             this.sharePdfUrl = URL.createObjectURL(pdfBlob);
@@ -542,7 +562,7 @@ new #[Title('Sales Receipts')] class extends Component
                 if (err.name !== 'AbortError') console.error('Share failed:', err);
             }
         }
-        
+
         const a = document.createElement('a');
         a.href = this.sharePdfUrl;
         a.download = this.sharePdfFile.name;
@@ -559,7 +579,7 @@ new #[Title('Sales Receipts')] class extends Component
     <!-- Multi-criteria filter bar -->
     <div class="app-card p-4 grid gap-4 sm:grid-cols-4">
         <flux:input wire:model.live.debounce.300ms="search" placeholder="Search by Invoice No..." />
-        
+
         <flux:select wire:model.live="selectedCustomer" placeholder="All Customers">
             @foreach ($this->customers as $cust)
                 <option value="{{ $cust->id }}">{{ $cust->name }}</option>
@@ -587,7 +607,7 @@ new #[Title('Sales Receipts')] class extends Component
                 <option value="last_year">Last Year</option>
                 <option value="custom">Custom Date Range</option>
             </flux:select>
-            
+
             @if ($dateRange === 'custom')
                 <div class="flex items-center gap-2 mt-2">
                     <flux:input type="date" wire:model.live="startDate" class="w-full" />
@@ -717,7 +737,7 @@ new #[Title('Sales Receipts')] class extends Component
                     <!-- Items listing -->
                     <div class="flex flex-col gap-2">
                         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1">{{ __('Products Sold') }}</h4>
-                        
+
                         @foreach ($this->selectedSale->items as $item)
                             <div class="flex items-center justify-between border-b border-zinc-100 pb-2.5 text-xs">
                                 <div>
@@ -756,7 +776,7 @@ new #[Title('Sales Receipts')] class extends Component
                     <!-- Polymorphic payments list -->
                     <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">
                         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{{ __('Receipt Payments Logs') }}</h4>
-                        
+
                         @foreach ($this->selectedSale->payments as $pm)
                             <div class="flex items-center justify-between rounded-xl bg-zinc-50 border border-zinc-100 p-3 text-xs">
                                 <div>
@@ -777,7 +797,7 @@ new #[Title('Sales Receipts')] class extends Component
                     @if (count($this->selectedSale->returns) > 0)
                         <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">
                             <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider text-rose-600">{{ __('Invoice Returns History') }}</h4>
-                            
+
                             @foreach ($this->selectedSale->returns as $ret)
                                 <div class="flex flex-col gap-2 rounded-2xl bg-rose-50/20 border border-rose-100 p-3 text-xs">
                                     <div class="flex justify-between items-center font-bold text-zinc-900">
@@ -785,7 +805,7 @@ new #[Title('Sales Receipts')] class extends Component
                                         <span class="text-rose-600">Rs {{ number_format($ret->refund_amount + $ret->adjusted_amount, 2) }}</span>
                                     </div>
                                     <span class="text-[10px] text-zinc-400">{{ $ret->date->format('Y-m-d') }} | Type: {{ str_replace('_', ' ', strtoupper($ret->return_type)) }}</span>
-                                    
+
                                     <!-- Items returned list in this log -->
                                     <div class="flex flex-col gap-1 border-t border-rose-100/50 pt-2 mt-1">
                                         @foreach ($ret->items as $ri)
@@ -808,7 +828,7 @@ new #[Title('Sales Receipts')] class extends Component
                                 Pay Due Balance
                             </flux:button>
                         @endif
-                        
+
                         <div class="grid grid-cols-2 gap-2 mt-1">
                             <flux:button type="button" onclick="window.print()" variant="outline" class="w-full text-zinc-600">
                                 <flux:icon.printer class="size-4 mr-2" />
@@ -831,7 +851,7 @@ new #[Title('Sales Receipts')] class extends Component
                                 <flux:icon.pencil-square class="size-4 mr-2" />
                                 Edit
                             </flux:button>
-                            
+
                             @if (auth()->user()->hasPermission('process_return'))
                                 <flux:button type="button" wire:click="initiateReturn" variant="subtle" class="w-full text-orange-600">
                                     <flux:icon.arrow-uturn-left class="size-4 mr-2" />
@@ -844,7 +864,7 @@ new #[Title('Sales Receipts')] class extends Component
                                 Delete
                             </flux:button>
                         </div>
-                        
+
                         <!-- Share PDF Actions Panel -->
                         <div x-show="sharePdfUrl" x-collapse class="mt-2 rounded-2xl bg-zinc-50 border border-zinc-100 p-3">
                             <div class="flex items-center justify-between gap-3 mb-2">
@@ -1001,14 +1021,33 @@ new #[Title('Sales Receipts')] class extends Component
                     <flux:input type="number" step="0.01" wire:model="payDueAmount" @input="val = $event.target.value" :label="__('Amount (Rs)')" required />
                 </div>
 
-                <flux:select wire:model="payDueMethod" :label="__('Payment Mode')">
+                <flux:select wire:model.live="payDueMethod" :label="__('Payment Mode')">
                     <option value="cash">Cash</option>
                     <option value="card">Card / POS</option>
                     <option value="bank_transfer">Bank Transfer</option>
                     <option value="cheque">Cheque</option>
                 </flux:select>
 
-                <flux:input wire:model="payDueReference" :label="__('Reference / Notes (Optional)')" placeholder="Txn ID or remarks..." />
+                @if ($payDueMethod === 'cheque')
+                    <div class="rounded-2xl border border-amber-100 bg-amber-50/40 p-4">
+                        <div class="flex items-center gap-2 text-amber-700">
+                            <flux:icon.banknotes class="size-4" />
+                            <p class="text-xs font-black uppercase tracking-wider">{{ __('Cheque Details') }}</p>
+                        </div>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                            <flux:input wire:model="payDueChequeBank" :label="__('Bank (optional)')" placeholder="Bank name" />
+                            <flux:input wire:model="payDueChequeNo" :label="__('Cheque No (optional)')" placeholder="Cheque number" />
+                        </div>
+                        <div class="mt-3">
+                            <flux:input wire:model="payDueChequeDate" :label="__('Cheque Date')" type="date" required />
+                        </div>
+                        <p class="mt-3 text-xs font-semibold text-amber-800">
+                            {{ __('Cheque payments stay on hold until marked passed. If still pending 7 days after the cheque date, the system marks it passed automatically when POS opens.') }}
+                        </p>
+                    </div>
+                @else
+                    <flux:input wire:model="payDueReference" :label="__('Reference / Notes (Optional)')" placeholder="Txn ID or remarks..." />
+                @endif
 
                 <flux:button type="submit" variant="primary" class="w-full mt-2">
                     <flux:icon.banknotes class="size-4 mr-2" />

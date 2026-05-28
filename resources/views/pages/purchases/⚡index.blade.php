@@ -179,6 +179,8 @@ new #[Title('Wholesale Purchase Logs')] class extends Component
                                 <flux:badge size="sm" color="emerald">Paid</flux:badge>
                             @elseif ($p->payment_status === 'partial')
                                 <flux:badge size="sm" color="orange">Partial</flux:badge>
+                            @elseif ($p->payment_status === 'cheque_pending')
+                                <flux:badge size="sm" color="amber">Cheque Hold</flux:badge>
                             @else
                                 <flux:badge size="sm" color="rose">Due</flux:badge>
                             @endif

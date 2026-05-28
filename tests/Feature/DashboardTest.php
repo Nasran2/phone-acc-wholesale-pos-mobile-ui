@@ -25,6 +25,23 @@ test('authenticated users can visit the dashboard', function () {
         ->assertSee('Live receipt stream');
 });
 
+test('authenticated users receive a left side mobile navigation drawer', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $this->get(route('dashboard'))
+        ->assertOk()
+        ->assertSee('-translate-x-full', false)
+        ->assertSee('mr-auto flex h-full', false)
+        ->assertSee('border-r border-zinc-100', false)
+        ->assertSee('Retail Core')
+        ->assertSee('POS Screen')
+        ->assertSee('Sales List')
+        ->assertSee('Products List')
+        ->assertSee('Purchase Report')
+        ->assertSee('Log out Cashier');
+});
+
 test('authenticated users can see critical stock alerts when products are low on stock', function () {
     $user = User::factory()->create();
     $this->actingAs($user);

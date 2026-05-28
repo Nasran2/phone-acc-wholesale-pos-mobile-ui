@@ -33,6 +33,9 @@ new #[Title('Manage Customers')] class extends Component
     public string $payReference = '';
     public string $payNotes = '';
     public string $payDate = '';
+    public string $payChequeBank = '';
+    public string $payChequeNo = '';
+    public string $payChequeDate = '';
 
     // Detail ledger statement state
     public ?int $selectedCustomerId = null;
@@ -167,16 +170,20 @@ new #[Title('Manage Customers')] class extends Component
         $this->payingCustomerId = $customer->id;
         $this->payAmount = (float) $customer->due_balance;
         $this->payDate = date('Y-m-d');
+        $this->payChequeDate = date('Y-m-d');
     }
 
     public function savePayment(TextItSmsService $smsService): void
     {
         $this->validate([
             'payAmount' => 'required|numeric|min:0.01',
-            'payMethod' => 'required|string',
+            'payMethod' => 'required|in:cash,card,bank_transfer,qr,cheque',
             'payDate'   => 'required|date',
             'payReference' => 'nullable|string',
             'payNotes' => 'nullable|string',
+            'payChequeBank' => 'nullable|string|max:100',
+            'payChequeNo' => 'nullable|string|max:100',
+            'payChequeDate' => 'required_if:payMethod,cheque|nullable|date',
         ]);
 
         $customer = Customer::query()->findOrFail($this->payingCustomerId);
@@ -191,8 +198,14 @@ new #[Title('Manage Customers')] class extends Component
             'amount' => (float) $this->payAmount,
             'payment_method' => $this->payMethod,
             'date' => $this->payDate ?: date('Y-m-d'),
-            'reference' => $this->payReference,
-            'notes' => $this->payNotes ?: 'Dues received from Customer Account Ledger.',
+            'reference' => $this->payMethod === 'cheque' ? ($this->payChequeNo ?: $this->payReference) : $this->payReference,
+            'cheque_bank' => $this->payMethod === 'cheque' ? ($this->payChequeBank ?: null) : null,
+            'cheque_no' => $this->payMethod === 'cheque' ? ($this->payChequeNo ?: null) : null,
+            'cheque_date' => $this->payMethod === 'cheque' ? $this->payChequeDate : null,
+            'cheque_status' => $this->payMethod === 'cheque' ? 'pending' : null,
+            'notes' => $this->payMethod === 'cheque'
+                ? 'Cheque payment on hold until cleared.'
+                : ($this->payNotes ?: 'Dues received from Customer Account Ledger.'),
         ]);
 
         // 2. Adjust customer outstanding due balance
@@ -219,7 +232,7 @@ new #[Title('Manage Customers')] class extends Component
 
     public function resetPaymentForm(): void
     {
-        $this->reset('payingCustomerId', 'payAmount', 'payMethod', 'payReference', 'payNotes', 'payDate');
+        $this->reset('payingCustomerId', 'payAmount', 'payMethod', 'payReference', 'payNotes', 'payDate', 'payChequeBank', 'payChequeNo', 'payChequeDate');
     }
 
     public function resetForm(): void
@@ -394,8 +407,8 @@ new #[Title('Manage Customers')] class extends Component
     }
 }; ?>
 
-<div class="flex flex-col gap-6" x-data="{ 
-    ledgerOpen: @entangle('selectedCustomerId'), 
+<div class="flex flex-col gap-6" x-data="{
+    ledgerOpen: @entangle('selectedCustomerId'),
     payOpen: @entangle('payingCustomerId'),
     saleOpen: @entangle('selectedSaleId'),
     editingCustomerId: @entangle('customerId'),
@@ -482,14 +495,14 @@ new #[Title('Manage Customers')] class extends Component
             wrapper.style.width = '794px';
             wrapper.style.background = 'white';
             wrapper.style.zIndex = '-1';
-            
+
             const clonedEl = originalEl.cloneNode(true);
             clonedEl.classList.remove('hidden', 'print:block');
             clonedEl.style.display = 'block';
             clonedEl.style.width = '794px';
             clonedEl.style.margin = '0';
             clonedEl.style.padding = '20px';
-            
+
             wrapper.appendChild(clonedEl);
             document.body.appendChild(wrapper);
 
@@ -501,7 +514,7 @@ new #[Title('Manage Customers')] class extends Component
                 windowWidth: 794,
                 width: 794
             });
-            
+
             document.body.removeChild(wrapper);
 
             const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -510,12 +523,12 @@ new #[Title('Manage Customers')] class extends Component
                 unit: 'mm',
                 format: 'a4'
             });
-            
+
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            
+
             pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-            
+
             const pdfBlob = pdf.output('blob');
             this.sharePdfFile = new File([pdfBlob], `${customerName}-Ledger.pdf`, { type: 'application/pdf' });
             this.sharePdfUrl = URL.createObjectURL(pdfBlob);
@@ -541,7 +554,7 @@ new #[Title('Manage Customers')] class extends Component
                 if (err.name !== 'AbortError') console.error('Share failed:', err);
             }
         }
-        
+
         const a = document.createElement('a');
         a.href = this.sharePdfUrl;
         a.download = this.sharePdfFile.name;
@@ -612,7 +625,7 @@ new #[Title('Manage Customers')] class extends Component
             }"
             x-init="$watch('editingId', (value) => { if (value) revealForm() }); if (editingId) revealForm()"
         >
-            <div 
+            <div
                 class="flex items-center justify-between border-b border-zinc-100 pb-4 cursor-pointer group"
                 @click="showForm = !showForm"
             >
@@ -633,7 +646,7 @@ new #[Title('Manage Customers')] class extends Component
                     <flux:input wire:model="phone" :label="__('Phone Number')" placeholder="e.g. 0771234567" />
                     <flux:input wire:model="email" :label="__('Email Address')" type="email" placeholder="e.g. nasran@example.com" />
                     <flux:textarea wire:model="address" :label="__('Billing Address')" rows="2" />
-                    
+
                     @if (! $customerId)
                         <flux:input wire:model="opening_balance" :label="__('Opening Dues (Initial Outstanding Receivable)')" type="number" step="0.01" />
                     @endif
@@ -704,7 +717,7 @@ new #[Title('Manage Customers')] class extends Component
                                 <flux:button variant="ghost" size="sm" wire:click="viewLedger({{ $c->id }})">
                                     Ledger
                                 </flux:button>
-                                
+
                                 @if ($c->due_balance > 0)
                                     <flux:button variant="ghost" size="sm" class="text-emerald-600 hover:text-emerald-700" wire:click="initiatePayment({{ $c->id }})">
                                         Collect
@@ -1021,7 +1034,7 @@ new #[Title('Manage Customers')] class extends Component
                         </div>
                     @endif
                 </div>
-                
+
                 <!-- Share & Print Actions -->
                 <div class="border-t border-zinc-100 pt-4 mt-2">
                     <div class="grid grid-cols-2 gap-2">
@@ -1151,15 +1164,35 @@ new #[Title('Manage Customers')] class extends Component
                 />
 
                 {{-- Method --}}
-                <flux:select wire:model="payMethod" :label="__('Payment Method')">
+                <flux:select wire:model.live="payMethod" :label="__('Payment Method')">
                     <option value="cash">Cash Account</option>
                     <option value="card">Credit / Debit Card</option>
                     <option value="bank_transfer">Direct Bank Deposit</option>
                     <option value="qr">LankaQR / QR Scan</option>
+                    <option value="cheque">Cheque Payment Hold</option>
                 </flux:select>
 
-                {{-- Reference --}}
-                <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Cheque / TxID)')" />
+                @if ($payMethod === 'cheque')
+                    <div class="rounded-2xl border border-amber-100 bg-amber-50/40 p-4">
+                        <div class="flex items-center gap-2 text-amber-700">
+                            <flux:icon.banknotes class="size-4" />
+                            <p class="text-xs font-black uppercase tracking-wider">{{ __('Cheque Details') }}</p>
+                        </div>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                            <flux:input wire:model="payChequeBank" :label="__('Bank (optional)')" placeholder="Bank name" />
+                            <flux:input wire:model="payChequeNo" :label="__('Cheque No (optional)')" placeholder="Cheque number" />
+                        </div>
+                        <div class="mt-3">
+                            <flux:input wire:model="payChequeDate" :label="__('Cheque Date')" type="date" required />
+                        </div>
+                        <p class="mt-3 text-xs font-semibold text-amber-800">
+                            {{ __('Cheque payments stay on hold until marked passed. If still pending 7 days after the cheque date, the system marks it passed automatically when POS opens.') }}
+                        </p>
+                    </div>
+                @else
+                    {{-- Reference --}}
+                    <flux:input wire:model="payReference" :label="__('Transaction Reference (e.g. Cheque / TxID)')" />
+                @endif
 
                 {{-- Notes --}}
                 <flux:textarea wire:model="payNotes" :label="__('Payment Ledger Notes')" rows="2" placeholder="Dues collection payment." />

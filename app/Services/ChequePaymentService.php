@@ -2,8 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\Customer;
 use App\Models\Payment;
+use App\Models\Purchase;
 use App\Models\Sale;
+use App\Models\Supplier;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -28,6 +31,38 @@ class ChequePaymentService
                 $this->applyPassedChequeToSale($sale, (float) $payment->amount);
             }
 
+            $customer = $payment->paymentable;
+            if ($customer instanceof Customer) {
+                // Customer due balance already reduced on cheque creation; no extra sync needed.
+            }
+
+            $purchase = $payment->paymentable;
+            if ($purchase instanceof Purchase) {
+                $this->applyPassedChequeToPurchase($purchase, (float) $payment->amount);
+            }
+
+            if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
+                $sourceSale = $payment->sourcePayment->paymentable;
+
+                if ($sourceSale instanceof Sale) {
+                    $this->applyPassedChequeToSale($sourceSale, (float) $payment->sourcePayment->amount);
+                }
+
+                $payment->sourcePayment->update([
+                    'cheque_status' => 'passed',
+                    'cheque_processed_at' => now(),
+                ]);
+
+                if ($sourceSale instanceof Sale) {
+                    $this->syncSaleStatus($sourceSale);
+                }
+            }
+
+            $supplier = $payment->paymentable;
+            if ($supplier instanceof Supplier) {
+                // Supplier due balance already reduced on cheque creation; no extra sync needed.
+            }
+
             $payment->update([
                 'cheque_status' => 'passed',
                 'cheque_processed_at' => now(),
@@ -35,6 +70,10 @@ class ChequePaymentService
 
             if ($sale instanceof Sale) {
                 $this->syncSaleStatus($sale);
+            }
+
+            if ($purchase instanceof Purchase) {
+                $this->syncPurchaseStatus($purchase);
             }
 
             $shouldNotify = true;
@@ -68,6 +107,38 @@ class ChequePaymentService
                 $this->syncSaleStatus($sale);
             }
 
+            $customer = $payment->paymentable;
+            if ($customer instanceof Customer) {
+                $customer->update([
+                    'due_balance' => round(max(0, (float) $customer->due_balance + (float) $payment->amount), 2),
+                ]);
+            }
+
+            $purchase = $payment->paymentable;
+            if ($purchase instanceof Purchase) {
+                $this->syncPurchaseStatus($purchase);
+            }
+
+            if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
+                $sourceSale = $payment->sourcePayment->paymentable;
+
+                $payment->sourcePayment->update([
+                    'cheque_status' => 'returned',
+                    'cheque_processed_at' => now(),
+                ]);
+
+                if ($sourceSale instanceof Sale) {
+                    $this->syncSaleStatus($sourceSale);
+                }
+            }
+
+            $supplier = $payment->paymentable;
+            if ($supplier instanceof Supplier) {
+                $supplier->update([
+                    'due_balance' => round(max(0, (float) $supplier->due_balance + (float) $payment->amount), 2),
+                ]);
+            }
+
             return $payment->refresh();
         });
     }
@@ -80,11 +151,32 @@ class ChequePaymentService
 
         Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
             ->whereDate('cheque_date', '<=', $cutoff)
-            ->with('paymentable.customer')
+            ->with('paymentable')
             ->orderBy('cheque_date')
             ->each(function (Payment $payment) use (&$processed) {
+                $this->pass($payment);
+                $processed++;
+            });
+
+        return $processed;
+    }
+
+    public function autoPassOverdueOwnSupplierCheques(?CarbonInterface $today = null): int
+    {
+        $today ??= today();
+        $cutoff = $today->copy()->subDays(3)->toDateString();
+        $processed = 0;
+
+        Payment::query()
+            ->pendingCheque()
+            ->whereIn('paymentable_type', [Purchase::class, Supplier::class])
+            ->where('cheque_type', 'own')
+            ->whereDate('cheque_date', '<=', $cutoff)
+            ->with('paymentable')
+            ->orderBy('cheque_date')
+            ->each(function (Payment $payment) use (&$processed): void {
                 $this->pass($payment);
                 $processed++;
             });
@@ -97,15 +189,51 @@ class ChequePaymentService
         $today ??= today();
 
         $this->autoPassOverduePendingCheques($today);
+        $this->autoPassOverdueOwnSupplierCheques($today);
 
-        return Payment::query()
+        $customerCheques = Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
+            ->whereDoesntHave('issuedPayments', fn ($query) => $query->where('cheque_status', 'pending'))
             ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString())
-            ->with('paymentable.customer')
+            ->with('paymentable')
             ->orderBy('cheque_date')
             ->orderBy('id')
             ->get();
+
+        $supplierCheques = Payment::query()
+            ->pendingCheque()
+            ->where(function ($query) use ($today): void {
+                $query->where(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Purchase::class)
+                        ->where('cheque_type', 'own')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(3)->toDateString());
+                })->orWhere(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Purchase::class)
+                        ->where('cheque_type', 'party')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString());
+                })->orWhere(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Supplier::class)
+                        ->where('cheque_type', 'own')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(3)->toDateString());
+                })->orWhere(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Supplier::class)
+                        ->where('cheque_type', 'party')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString());
+                });
+            })
+            ->with(['paymentable', 'sourcePayment.paymentable.customer', 'partyCustomer'])
+            ->orderBy('cheque_date')
+            ->orderBy('id')
+            ->get();
+
+        return $customerCheques
+            ->concat($supplierCheques)
+            ->sortBy([
+                ['cheque_date', 'asc'],
+                ['id', 'asc'],
+            ])
+            ->values();
     }
 
     private function applyPassedChequeToSale(Sale $sale, float $amount): void
@@ -121,6 +249,22 @@ class ChequePaymentService
 
         $sale->update([
             'paid_amount' => round((float) $sale->paid_amount + $acceptedAmount, 2),
+        ]);
+    }
+
+    private function applyPassedChequeToPurchase(Purchase $purchase, float $amount): void
+    {
+        $purchase->refresh();
+
+        $remainingBalance = max(0, (float) $purchase->grand_total - (float) $purchase->paid_amount);
+        $acceptedAmount = min($amount, $remainingBalance);
+
+        if ($acceptedAmount <= 0) {
+            return;
+        }
+
+        $purchase->update([
+            'paid_amount' => round((float) $purchase->paid_amount + $acceptedAmount, 2),
         ]);
     }
 
@@ -153,6 +297,39 @@ class ChequePaymentService
         if ($dueDelta !== 0.0 && $sale->customer) {
             $sale->customer->update([
                 'due_balance' => round(max(0, (float) $sale->customer->due_balance + $dueDelta), 2),
+            ]);
+        }
+    }
+
+    private function syncPurchaseStatus(Purchase $purchase): void
+    {
+        $purchase->refresh();
+        $oldDueAmount = (float) $purchase->due_amount;
+        $pendingChequeAmount = (float) $purchase->payments()
+            ->where('payment_method', 'cheque')
+            ->where('cheque_status', 'pending')
+            ->sum('amount');
+        $paidAmount = (float) $purchase->paid_amount;
+        $dueAmount = round(max(0, (float) $purchase->grand_total - $paidAmount - $pendingChequeAmount), 2);
+
+        $status = 'cheque_pending';
+        if ($pendingChequeAmount <= 0 && $dueAmount <= 0) {
+            $status = 'paid';
+        } elseif ($pendingChequeAmount <= 0 && $paidAmount > 0) {
+            $status = 'partial';
+        } elseif ($pendingChequeAmount <= 0) {
+            $status = 'due';
+        }
+
+        $purchase->update([
+            'due_amount' => $dueAmount,
+            'payment_status' => $status,
+        ]);
+
+        $dueDelta = round($dueAmount - $oldDueAmount, 2);
+        if ($dueDelta !== 0.0 && $purchase->supplier) {
+            $purchase->supplier->update([
+                'due_balance' => round(max(0, (float) $purchase->supplier->due_balance + $dueDelta), 2),
             ]);
         }
     }
