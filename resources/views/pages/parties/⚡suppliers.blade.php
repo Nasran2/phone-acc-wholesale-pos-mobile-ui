@@ -494,7 +494,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                 <flux:button variant="ghost" size="sm" wire:click="viewLedger({{ $s->id }})">
                                     Ledger
                                 </flux:button>
-                                
+
                                 @if ($s->due_balance > 0)
                                     <flux:button variant="ghost" size="sm" class="text-emerald-600 hover:text-emerald-700" wire:click="initiatePayment({{ $s->id }})">
                                         Payoff
@@ -669,7 +669,7 @@ new #[Title('Manage Suppliers')] class extends Component
                     <span class="text-zinc-500 font-semibold">{{ __('Remaining Supplier Due') }}</span>
                     <span class="font-bold text-rose-600">Rs {{ number_format($afterPay, 2) }}</span>
                 </div>
-                
+
                 <flux:select wire:model.live="payMethod" :label="__('Payment Method')">
                     <option value="cash">Cash Account</option>
                     <option value="card">Credit / Debit Card</option>

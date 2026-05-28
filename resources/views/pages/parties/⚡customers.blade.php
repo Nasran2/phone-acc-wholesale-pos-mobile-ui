@@ -407,8 +407,8 @@ new #[Title('Manage Customers')] class extends Component
     }
 }; ?>
 
-<div class="flex flex-col gap-6" x-data="{ 
-    ledgerOpen: @entangle('selectedCustomerId'), 
+<div class="flex flex-col gap-6" x-data="{
+    ledgerOpen: @entangle('selectedCustomerId'),
     payOpen: @entangle('payingCustomerId'),
     saleOpen: @entangle('selectedSaleId'),
     editingCustomerId: @entangle('customerId'),
@@ -495,14 +495,14 @@ new #[Title('Manage Customers')] class extends Component
             wrapper.style.width = '794px';
             wrapper.style.background = 'white';
             wrapper.style.zIndex = '-1';
-            
+
             const clonedEl = originalEl.cloneNode(true);
             clonedEl.classList.remove('hidden', 'print:block');
             clonedEl.style.display = 'block';
             clonedEl.style.width = '794px';
             clonedEl.style.margin = '0';
             clonedEl.style.padding = '20px';
-            
+
             wrapper.appendChild(clonedEl);
             document.body.appendChild(wrapper);
 
@@ -514,7 +514,7 @@ new #[Title('Manage Customers')] class extends Component
                 windowWidth: 794,
                 width: 794
             });
-            
+
             document.body.removeChild(wrapper);
 
             const imgData = canvas.toDataURL('image/jpeg', 0.95);
@@ -523,12 +523,12 @@ new #[Title('Manage Customers')] class extends Component
                 unit: 'mm',
                 format: 'a4'
             });
-            
+
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            
+
             pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-            
+
             const pdfBlob = pdf.output('blob');
             this.sharePdfFile = new File([pdfBlob], `${customerName}-Ledger.pdf`, { type: 'application/pdf' });
             this.sharePdfUrl = URL.createObjectURL(pdfBlob);
@@ -554,7 +554,7 @@ new #[Title('Manage Customers')] class extends Component
                 if (err.name !== 'AbortError') console.error('Share failed:', err);
             }
         }
-        
+
         const a = document.createElement('a');
         a.href = this.sharePdfUrl;
         a.download = this.sharePdfFile.name;
@@ -625,7 +625,7 @@ new #[Title('Manage Customers')] class extends Component
             }"
             x-init="$watch('editingId', (value) => { if (value) revealForm() }); if (editingId) revealForm()"
         >
-            <div 
+            <div
                 class="flex items-center justify-between border-b border-zinc-100 pb-4 cursor-pointer group"
                 @click="showForm = !showForm"
             >
@@ -646,7 +646,7 @@ new #[Title('Manage Customers')] class extends Component
                     <flux:input wire:model="phone" :label="__('Phone Number')" placeholder="e.g. 0771234567" />
                     <flux:input wire:model="email" :label="__('Email Address')" type="email" placeholder="e.g. nasran@example.com" />
                     <flux:textarea wire:model="address" :label="__('Billing Address')" rows="2" />
-                    
+
                     @if (! $customerId)
                         <flux:input wire:model="opening_balance" :label="__('Opening Dues (Initial Outstanding Receivable)')" type="number" step="0.01" />
                     @endif
@@ -717,7 +717,7 @@ new #[Title('Manage Customers')] class extends Component
                                 <flux:button variant="ghost" size="sm" wire:click="viewLedger({{ $c->id }})">
                                     Ledger
                                 </flux:button>
-                                
+
                                 @if ($c->due_balance > 0)
                                     <flux:button variant="ghost" size="sm" class="text-emerald-600 hover:text-emerald-700" wire:click="initiatePayment({{ $c->id }})">
                                         Collect
@@ -1034,7 +1034,7 @@ new #[Title('Manage Customers')] class extends Component
                         </div>
                     @endif
                 </div>
-                
+
                 <!-- Share & Print Actions -->
                 <div class="border-t border-zinc-100 pt-4 mt-2">
                     <div class="grid grid-cols-2 gap-2">
