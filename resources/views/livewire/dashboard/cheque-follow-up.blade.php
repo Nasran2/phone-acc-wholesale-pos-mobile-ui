@@ -16,6 +16,7 @@
                 @foreach ($cheques as $cheque)
                     @php($sale = $cheque->paymentable instanceof \App\Models\Sale ? $cheque->paymentable : null)
                     @php($purchase = $cheque->paymentable instanceof \App\Models\Purchase ? $cheque->paymentable : null)
+                    @php($supplier = $cheque->paymentable instanceof \App\Models\Supplier ? $cheque->paymentable : null)
                     @php($sourceSale = $cheque->sourcePayment?->paymentable instanceof \App\Models\Sale ? $cheque->sourcePayment->paymentable : null)
                     <div class="flex flex-col justify-between gap-3 rounded-2xl border border-amber-100 bg-white p-3 shadow-sm dark:border-amber-900/30 dark:bg-zinc-900/85" wire:key="cheque-alert-{{ $cheque->id }}">
                         <div class="min-w-0">
@@ -23,23 +24,29 @@
                                 <p class="truncate text-sm font-black text-zinc-950 dark:text-zinc-50">
                                     @if ($purchase)
                                         {{ $purchase->supplier?->name ?? __('Unknown Supplier') }}
+                                    @elseif ($supplier)
+                                        {{ $supplier->name ?? __('Unknown Supplier') }}
                                     @else
                                         {{ $sale?->customer?->name ?? __('Unknown Customer') }}
                                     @endif
                                 </p>
                                 <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-                                    {{ $purchase?->invoice_no ?? $sale?->invoice_no }}
+                                    {{ $purchase?->invoice_no ?? $sale?->invoice_no ?? ($cheque->reference ?: 'SUPP-PAY') }}
                                 </span>
                             </div>
                             @if ($purchase)
                                 <p class="mt-1 text-[10px] font-black uppercase tracking-wide text-violet-600 dark:text-violet-300">
                                     {{ $cheque->cheque_type === 'party' ? __('Party cheque to supplier') : __('Own cheque to supplier') }}
                                 </p>
+                            @elseif ($supplier)
+                                <p class="mt-1 text-[10px] font-black uppercase tracking-wide text-violet-600 dark:text-violet-300">
+                                    {{ __('Supplier payoff cheque') }}
+                                </p>
                             @endif
                             <p class="mt-1 text-[10px] font-semibold text-zinc-400 dark:text-zinc-500">
                                 {{ __('Due date:') }} <span class="font-bold text-zinc-600 dark:text-zinc-300">{{ $cheque->cheque_date?->format('Y-m-d') }}</span>
                             </p>
-                            @if ($purchase && $cheque->cheque_type === 'party')
+                            @if (($purchase || $supplier) && $cheque->cheque_type === 'party')
                                 <p class="mt-0.5 text-[10px] font-semibold text-zinc-500 dark:text-zinc-400">
                                     {{ __('Customer:') }} <span class="font-bold">{{ $sourceSale?->customer?->name ?? $cheque->partyCustomer?->name ?? __('Unknown Customer') }}</span>
                                 </p>

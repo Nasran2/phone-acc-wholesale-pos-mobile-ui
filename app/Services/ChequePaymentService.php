@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Sale;
+use App\Models\Supplier;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
@@ -32,23 +33,28 @@ class ChequePaymentService
             $purchase = $payment->paymentable;
             if ($purchase instanceof Purchase) {
                 $this->applyPassedChequeToPurchase($purchase, (float) $payment->amount);
+            }
 
-                if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
-                    $sourceSale = $payment->sourcePayment->paymentable;
+            if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
+                $sourceSale = $payment->sourcePayment->paymentable;
 
-                    if ($sourceSale instanceof Sale) {
-                        $this->applyPassedChequeToSale($sourceSale, (float) $payment->sourcePayment->amount);
-                    }
-
-                    $payment->sourcePayment->update([
-                        'cheque_status' => 'passed',
-                        'cheque_processed_at' => now(),
-                    ]);
-
-                    if ($sourceSale instanceof Sale) {
-                        $this->syncSaleStatus($sourceSale);
-                    }
+                if ($sourceSale instanceof Sale) {
+                    $this->applyPassedChequeToSale($sourceSale, (float) $payment->sourcePayment->amount);
                 }
+
+                $payment->sourcePayment->update([
+                    'cheque_status' => 'passed',
+                    'cheque_processed_at' => now(),
+                ]);
+
+                if ($sourceSale instanceof Sale) {
+                    $this->syncSaleStatus($sourceSale);
+                }
+            }
+
+            $supplier = $payment->paymentable;
+            if ($supplier instanceof Supplier) {
+                // Supplier due balance already reduced on cheque creation; no extra sync needed.
             }
 
             $payment->update([
@@ -97,20 +103,27 @@ class ChequePaymentService
 
             $purchase = $payment->paymentable;
             if ($purchase instanceof Purchase) {
-                if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
-                    $sourceSale = $payment->sourcePayment->paymentable;
-
-                    $payment->sourcePayment->update([
-                        'cheque_status' => 'returned',
-                        'cheque_processed_at' => now(),
-                    ]);
-
-                    if ($sourceSale instanceof Sale) {
-                        $this->syncSaleStatus($sourceSale);
-                    }
-                }
-
                 $this->syncPurchaseStatus($purchase);
+            }
+
+            if ($payment->cheque_type === 'party' && $payment->sourcePayment?->cheque_status === 'pending') {
+                $sourceSale = $payment->sourcePayment->paymentable;
+
+                $payment->sourcePayment->update([
+                    'cheque_status' => 'returned',
+                    'cheque_processed_at' => now(),
+                ]);
+
+                if ($sourceSale instanceof Sale) {
+                    $this->syncSaleStatus($sourceSale);
+                }
+            }
+
+            $supplier = $payment->paymentable;
+            if ($supplier instanceof Supplier) {
+                $supplier->update([
+                    'due_balance' => round(max(0, (float) $supplier->due_balance + (float) $payment->amount), 2),
+                ]);
             }
 
             return $payment->refresh();
@@ -145,10 +158,10 @@ class ChequePaymentService
 
         Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Purchase::class)
+            ->whereIn('paymentable_type', [Purchase::class, Supplier::class])
             ->where('cheque_type', 'own')
             ->whereDate('cheque_date', '<=', $cutoff)
-            ->with('paymentable.supplier')
+            ->with('paymentable')
             ->orderBy('cheque_date')
             ->each(function (Payment $payment) use (&$processed): void {
                 $this->pass($payment);
@@ -177,17 +190,26 @@ class ChequePaymentService
 
         $supplierCheques = Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Purchase::class)
             ->where(function ($query) use ($today): void {
                 $query->where(function ($query) use ($today): void {
-                    $query->where('cheque_type', 'own')
+                    $query->where('paymentable_type', Purchase::class)
+                        ->where('cheque_type', 'own')
                         ->whereDate('cheque_date', '<=', $today->copy()->addDays(3)->toDateString());
                 })->orWhere(function ($query) use ($today): void {
-                    $query->where('cheque_type', 'party')
+                    $query->where('paymentable_type', Purchase::class)
+                        ->where('cheque_type', 'party')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString());
+                })->orWhere(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Supplier::class)
+                        ->where('cheque_type', 'own')
+                        ->whereDate('cheque_date', '<=', $today->copy()->addDays(3)->toDateString());
+                })->orWhere(function ($query) use ($today): void {
+                    $query->where('paymentable_type', Supplier::class)
+                        ->where('cheque_type', 'party')
                         ->whereDate('cheque_date', '<=', $today->copy()->addDays(2)->toDateString());
                 });
             })
-            ->with(['paymentable.supplier', 'sourcePayment.paymentable.customer', 'partyCustomer'])
+            ->with(['paymentable', 'sourcePayment.paymentable.customer', 'partyCustomer'])
             ->orderBy('cheque_date')
             ->orderBy('id')
             ->get();

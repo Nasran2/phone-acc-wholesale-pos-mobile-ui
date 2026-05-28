@@ -219,3 +219,117 @@ test('customer cheques issued to suppliers are hidden from dashboard follow-up',
         ->toContain($supplierPayment->id)
         ->not->toContain($sourcePayment->id);
 });
+
+test('supplier payoff cheques appear in dashboard follow-up list', function () {
+    $supplier = Supplier::query()->create([
+        'name' => 'Supplier Cheque Followup',
+        'phone' => '0773333333',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $supplier->payments()->create([
+        'amount' => 250,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'SUP-CHQ-200',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'SUP-CHQ-200',
+        'cheque_date' => today()->addDays(2)->toDateString(),
+        'cheque_status' => 'pending',
+        'cheque_type' => 'own',
+    ]);
+
+    $cheques = app(ChequePaymentService::class)->actionablePendingCheques(today());
+
+    expect($cheques->pluck('id'))->toContain($payment->id);
+});
+
+test('returning supplier payoff cheque restores supplier due balance', function () {
+    $supplier = Supplier::query()->create([
+        'name' => 'Supplier Cheque Return',
+        'phone' => '0774444444',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $supplier->payments()->create([
+        'amount' => 400,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'SUP-CHQ-RET',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'SUP-CHQ-RET',
+        'cheque_date' => today()->addDays(2)->toDateString(),
+        'cheque_status' => 'pending',
+        'cheque_type' => 'own',
+    ]);
+
+    app(ChequePaymentService::class)->markReturned($payment);
+
+    expect($payment->refresh()->cheque_status)->toBe('returned')
+        ->and((float) $supplier->refresh()->due_balance)->toBe(400.0);
+});
+
+test('party supplier payoff cheque pass settles customer sale', function () {
+    [$customer, $sale, $sourcePayment] = createChequeSale(today()->toDateString());
+
+    $supplier = Supplier::query()->create([
+        'name' => 'Supplier Party Pass',
+        'phone' => '0775555555',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $supplier->payments()->create([
+        'amount' => 1000,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => $sourcePayment->cheque_no,
+        'cheque_bank' => $sourcePayment->cheque_bank,
+        'cheque_no' => $sourcePayment->cheque_no,
+        'cheque_date' => $sourcePayment->cheque_date,
+        'cheque_status' => 'pending',
+        'cheque_type' => 'party',
+        'source_payment_id' => $sourcePayment->id,
+        'party_customer_id' => $customer->id,
+    ]);
+
+    app(ChequePaymentService::class)->pass($payment);
+
+    expect($sourcePayment->refresh()->cheque_status)->toBe('passed')
+        ->and($sale->refresh()->payment_status)->toBe('paid')
+        ->and((float) $customer->refresh()->due_balance)->toBe(0.0);
+});
+
+test('party supplier payoff cheque return makes customer due and restores supplier balance', function () {
+    [$customer, $sale, $sourcePayment] = createChequeSale(today()->toDateString());
+
+    $supplier = Supplier::query()->create([
+        'name' => 'Supplier Party Return',
+        'phone' => '0776666666',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $payment = $supplier->payments()->create([
+        'amount' => 1000,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => $sourcePayment->cheque_no,
+        'cheque_bank' => $sourcePayment->cheque_bank,
+        'cheque_no' => $sourcePayment->cheque_no,
+        'cheque_date' => $sourcePayment->cheque_date,
+        'cheque_status' => 'pending',
+        'cheque_type' => 'party',
+        'source_payment_id' => $sourcePayment->id,
+        'party_customer_id' => $customer->id,
+    ]);
+
+    app(ChequePaymentService::class)->markReturned($payment);
+
+    expect($sourcePayment->refresh()->cheque_status)->toBe('returned')
+        ->and($sale->refresh()->payment_status)->toBe('due')
+        ->and((float) $customer->refresh()->due_balance)->toBe(1000.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(1000.0);
+});

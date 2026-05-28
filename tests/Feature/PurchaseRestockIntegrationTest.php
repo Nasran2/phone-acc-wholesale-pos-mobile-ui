@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Customer;
+use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Purchase;
 use App\Models\Sale;
@@ -177,6 +178,115 @@ test('purchase can be recorded with a selected party cheque hold', function () {
         ->and($supplierPayment->cheque_type)->toBe('party')
         ->and($supplierPayment->source_payment_id)->toBe($customerCheque->id)
         ->and($supplierPayment->party_customer_id)->toBe($customer->id);
+});
+
+test('supplier payoff can be recorded with a cheque hold', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $supplier = Supplier::query()->create([
+        'name' => 'Payoff Cheque Supplier',
+        'opening_balance' => 0,
+        'due_balance' => 500,
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::parties.suppliers')
+        ->call('initiatePayment', $supplier->id)
+        ->set('payMethod', 'cheque')
+        ->set('payChequeType', 'own')
+        ->set('payAmount', 500)
+        ->set('payChequeNo', 'SUP-CHQ-100')
+        ->set('payChequeBank', 'BOC')
+        ->set('payChequeDate', today()->addDays(3)->toDateString())
+        ->call('savePayment')
+        ->assertHasNoErrors();
+
+    $payment = Payment::query()->where('paymentable_type', Supplier::class)->firstOrFail();
+
+    expect($payment->payment_method)->toBe('cheque')
+        ->and($payment->cheque_status)->toBe('pending')
+        ->and($payment->cheque_type)->toBe('own')
+        ->and($payment->cheque_no)->toBe('SUP-CHQ-100')
+        ->and((float) $supplier->refresh()->due_balance)->toBe(0.0);
+});
+
+test('supplier payoff can be recorded with a party cheque hold', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $supplier = Supplier::query()->create([
+        'name' => 'Party Payoff Supplier',
+        'opening_balance' => 0,
+        'due_balance' => 1000,
+    ]);
+    $customer = Customer::query()->create([
+        'name' => 'Party Payoff Customer',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+    $sale = Sale::query()->create([
+        'customer_id' => $customer->id,
+        'invoice_no' => 'INV-PAYOFF-100',
+        'date' => today(),
+        'subtotal_amount' => 600,
+        'discount_amount' => 0,
+        'tax_amount' => 0,
+        'grand_total' => 600,
+        'paid_amount' => 0,
+        'due_amount' => 0,
+        'payment_status' => 'cheque_pending',
+        'profit' => 0,
+    ]);
+    $customerCheque = $sale->payments()->create([
+        'amount' => 600,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'PAYOFF-CHQ-100',
+        'cheque_bank' => 'NDB',
+        'cheque_no' => 'PAYOFF-CHQ-100',
+        'cheque_date' => today()->addDays(2),
+        'cheque_status' => 'pending',
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::parties.suppliers')
+        ->call('initiatePayment', $supplier->id)
+        ->set('payMethod', 'cheque')
+        ->set('payChequeType', 'party')
+        ->call('selectPayPartyCheque', $customerCheque->id)
+        ->call('savePayment')
+        ->assertHasNoErrors();
+
+    $payment = Payment::query()->where('paymentable_type', Supplier::class)->firstOrFail();
+
+    expect($payment->cheque_type)->toBe('party')
+        ->and($payment->source_payment_id)->toBe($customerCheque->id)
+        ->and($payment->party_customer_id)->toBe($customer->id)
+        ->and($payment->cheque_no)->toBe('PAYOFF-CHQ-100')
+        ->and((float) $supplier->refresh()->due_balance)->toBe(400.0);
+});
+
+test('supplier ledger shows cheque status badge for cheque payoffs', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $supplier = Supplier::query()->create([
+        'name' => 'Ledger Cheque Supplier',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+
+    $supplier->payments()->create([
+        'amount' => 120,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'LEDGER-CHQ-100',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'LEDGER-CHQ-100',
+        'cheque_date' => today()->addDays(2),
+        'cheque_status' => 'pending',
+        'cheque_type' => 'own',
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::parties.suppliers')
+        ->call('viewLedger', $supplier->id)
+        ->assertSee('Pending');
 });
 
 test('purchase create defaults to party cheque type', function () {
