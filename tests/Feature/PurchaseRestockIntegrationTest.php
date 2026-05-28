@@ -1,7 +1,9 @@
 <?php
 
+use App\Models\Customer;
 use App\Models\Product;
 use App\Models\Purchase;
+use App\Models\Sale;
 use App\Models\Supplier;
 use App\Models\User;
 use Livewire\Livewire;
@@ -101,4 +103,174 @@ test('purchases index links to supplier list page and products details', functio
         ->call('viewInvoice', $purchase->id)
         ->assertSee(route('parties.suppliers', ['supplier_id' => $supplier->id]))
         ->assertSee(route('products.show', $product->id));
+});
+
+test('purchase can be recorded with a selected party cheque hold', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $supplier = Supplier::query()->create([
+        'name' => 'Party Cheque Supplier',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+    $customer = Customer::query()->create([
+        'name' => 'Party Cheque Customer',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+    $product = Product::factory()->create([
+        'name' => 'Party Cheque Stock',
+        'cost_price' => 100,
+        'selling_price' => 150,
+    ]);
+
+    $sale = Sale::query()->create([
+        'customer_id' => $customer->id,
+        'invoice_no' => 'INV-PC-100',
+        'date' => today(),
+        'subtotal_amount' => 1000,
+        'discount_amount' => 0,
+        'tax_amount' => 0,
+        'grand_total' => 1000,
+        'paid_amount' => 0,
+        'due_amount' => 0,
+        'payment_status' => 'cheque_pending',
+        'profit' => 0,
+    ]);
+
+    $customerCheque = $sale->payments()->create([
+        'amount' => 1000,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'PC-100',
+        'cheque_bank' => 'NDB',
+        'cheque_no' => 'PC-100',
+        'cheque_date' => today()->addDays(2),
+        'cheque_status' => 'pending',
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::purchases.create')
+        ->set('invoice_no', 'PUR-PC-100')
+        ->set('supplier_id', $supplier->id)
+        ->set('cart', [[
+            'product_id' => $product->id,
+            'name' => $product->name,
+            'sku' => $product->sku,
+            'quantity' => 10,
+            'cost_price' => 100,
+            'selling_price' => 150,
+            'subtotal' => 1000,
+        ]])
+        ->set('paid_amount', 1000)
+        ->set('payment_method', 'cheque')
+        ->set('cheque_type', 'party')
+        ->call('selectPartyCheque', $customerCheque->id)
+        ->call('savePurchase')
+        ->assertHasNoErrors();
+
+    $purchase = Purchase::query()->where('invoice_no', 'PUR-PC-100')->firstOrFail();
+    $supplierPayment = $purchase->payments()->firstOrFail();
+
+    expect($purchase->payment_status)->toBe('cheque_pending')
+        ->and((float) $purchase->due_amount)->toBe(0.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(0.0)
+        ->and($supplierPayment->cheque_type)->toBe('party')
+        ->and($supplierPayment->source_payment_id)->toBe($customerCheque->id)
+        ->and($supplierPayment->party_customer_id)->toBe($customer->id);
+});
+
+test('purchase create defaults to party cheque type', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+
+    Livewire::actingAs($user)
+        ->test('pages::purchases.create')
+        ->assertSet('cheque_type', 'party');
+});
+
+test('purchase create auto-fills paid amount for cash and bank transfer', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $product = Product::factory()->create([
+        'name' => 'Auto Fill Stock',
+        'cost_price' => 100,
+        'selling_price' => 150,
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::purchases.create')
+        ->call('selectProduct', $product->id)
+        ->assertSet('paid_amount', 100.0)
+        ->set('discount', 10)
+        ->assertSet('paid_amount', 90.0)
+        ->set('payment_method', 'bank_transfer')
+        ->call('updateCartRow', 0, 'quantity', 2)
+        ->assertSet('paid_amount', 190.0);
+});
+
+test('party cheque lower than total leaves supplier due with partial status', function () {
+    $user = User::factory()->create(['role' => 'super_admin', 'is_active' => true]);
+    $supplier = Supplier::query()->create([
+        'name' => 'Partial Cheque Supplier',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+    $customer = Customer::query()->create([
+        'name' => 'Partial Cheque Customer',
+        'opening_balance' => 0,
+        'due_balance' => 0,
+    ]);
+    $product = Product::factory()->create([
+        'name' => 'Partial Cheque Stock',
+        'cost_price' => 100,
+        'selling_price' => 150,
+    ]);
+
+    $sale = Sale::query()->create([
+        'customer_id' => $customer->id,
+        'invoice_no' => 'INV-PC-200',
+        'date' => today(),
+        'subtotal_amount' => 600,
+        'discount_amount' => 0,
+        'tax_amount' => 0,
+        'grand_total' => 600,
+        'paid_amount' => 0,
+        'due_amount' => 0,
+        'payment_status' => 'cheque_pending',
+        'profit' => 0,
+    ]);
+
+    $customerCheque = $sale->payments()->create([
+        'amount' => 600,
+        'payment_method' => 'cheque',
+        'date' => today(),
+        'reference' => 'PC-200',
+        'cheque_bank' => 'BOC',
+        'cheque_no' => 'PC-200',
+        'cheque_date' => today()->addDays(2),
+        'cheque_status' => 'pending',
+    ]);
+
+    Livewire::actingAs($user)
+        ->test('pages::purchases.create')
+        ->set('invoice_no', 'PUR-PC-200')
+        ->set('supplier_id', $supplier->id)
+        ->set('cart', [[
+            'product_id' => $product->id,
+            'name' => $product->name,
+            'sku' => $product->sku,
+            'quantity' => 10,
+            'cost_price' => 100,
+            'selling_price' => 150,
+            'subtotal' => 1000,
+        ]])
+        ->set('payment_method', 'cheque')
+        ->set('cheque_type', 'party')
+        ->call('selectPartyCheque', $customerCheque->id)
+        ->call('savePurchase')
+        ->assertHasNoErrors();
+
+    $purchase = Purchase::query()->where('invoice_no', 'PUR-PC-200')->firstOrFail();
+
+    expect((float) $purchase->due_amount)->toBe(400.0)
+        ->and($purchase->payment_status)->toBe('partial')
+        ->and((float) $supplier->refresh()->due_balance)->toBe(400.0);
 });

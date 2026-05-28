@@ -53,7 +53,10 @@ test('public bill link opens without authentication', function () {
     $this->get(route('public.bill', ['sale' => $sale->invoice_no]))
         ->assertSuccessful()
         ->assertSee($sale->invoice_no)
-        ->assertSee('SMS Customer');
+        ->assertSee('SMS Customer')
+        ->assertSee('Retail Bill')
+        ->assertDontSee('Tax Invoice')
+        ->assertDontSee('Sales Tax');
 });
 
 test('sale sms includes the public bill link', function () {

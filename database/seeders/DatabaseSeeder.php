@@ -21,41 +21,45 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         // 1. Seed Core Users
-        User::query()->create([
-            'name' => 'Super Admin',
-            'email' => 'admin@example.com',
-            'username' => 'admin',
-            'password' => Hash::make('password'),
-            'role' => 'super_admin',
-            'is_active' => true,
-        ]);
+        $users = [
+            [
+                'name' => 'Super Admin',
+                'email' => 'admin@example.com',
+                'username' => 'admin',
+                'role' => 'super_admin',
+            ],
+            [
+                'name' => 'Cashier Imran',
+                'email' => 'cashier@example.com',
+                'username' => 'cashier',
+                'role' => 'cashier',
+            ],
+            [
+                'name' => 'Accountant Sam',
+                'email' => 'accountant@example.com',
+                'username' => 'accountant',
+                'role' => 'accountant',
+            ],
+            [
+                'name' => 'Inventory Manager',
+                'email' => 'inventory@example.com',
+                'username' => 'inventory',
+                'role' => 'inventory_manager',
+            ],
+        ];
 
-        User::query()->create([
-            'name' => 'Cashier Imran',
-            'email' => 'cashier@example.com',
-            'username' => 'cashier',
-            'password' => Hash::make('password'),
-            'role' => 'cashier',
-            'is_active' => true,
-        ]);
-
-        User::query()->create([
-            'name' => 'Accountant Sam',
-            'email' => 'accountant@example.com',
-            'username' => 'accountant',
-            'password' => Hash::make('password'),
-            'role' => 'accountant',
-            'is_active' => true,
-        ]);
-
-        User::query()->create([
-            'name' => 'Inventory Manager',
-            'email' => 'inventory@example.com',
-            'username' => 'inventory',
-            'password' => Hash::make('password'),
-            'role' => 'inventory_manager',
-            'is_active' => true,
-        ]);
+        foreach ($users as $user) {
+            User::query()->updateOrCreate(
+                ['email' => $user['email']],
+                [
+                    'name' => $user['name'],
+                    'username' => $user['username'],
+                    'password' => Hash::make('password'),
+                    'role' => $user['role'],
+                    'is_active' => true,
+                ],
+            );
+        }
 
         // 2. Seed Default Settings
         $settings = [
@@ -103,40 +107,86 @@ class DatabaseSeeder extends Seeder
         }
 
         // 3. Seed Default Walk-in Customer
-        $walkIn = Customer::query()->create([
-            'name' => 'Walk-in Customer',
-            'phone' => '0000000000',
-            'email' => 'walkin@example.com',
-            'address' => 'Colombo, Sri Lanka',
-            'opening_balance' => 0.00,
-            'due_balance' => 0.00,
-        ]);
+        $walkIn = Customer::query()->updateOrCreate(
+            ['phone' => '0000000000'],
+            [
+                'name' => 'Walk-in Customer',
+                'email' => 'walkin@example.com',
+                'address' => 'Colombo, Sri Lanka',
+                'opening_balance' => 0.00,
+                'due_balance' => 0.00,
+            ],
+        );
 
         // Seed an extra test customer
-        Customer::query()->create([
-            'name' => 'Mohamed Nasran',
-            'phone' => '0771234567',
-            'email' => 'nasran@example.com',
-            'address' => 'Galle Road, Colombo 03',
-            'opening_balance' => 0.00,
-            'due_balance' => 1500.00, // starting test due
-        ]);
+        Customer::query()->updateOrCreate(
+            ['phone' => '0771234567'],
+            [
+                'name' => 'Mohamed Nasran',
+                'email' => 'nasran@example.com',
+                'address' => 'Galle Road, Colombo 03',
+                'opening_balance' => 0.00,
+                'due_balance' => 1500.00, // starting test due
+            ],
+        );
 
         // 4. Seed Default Supplier
-        $supplier = Supplier::query()->create([
-            'name' => 'Imran Wholesale Distributors',
-            'phone' => '0777999888',
-            'email' => 'wholesale@imran.com',
-            'company_name' => 'Imran Accessories Ltd',
-            'address' => 'Pettah Wholesale Market, Colombo 11',
-            'opening_balance' => 0.00,
-            'due_balance' => 0.00,
-        ]);
+        $suppliers = [
+            [
+                'name' => 'Imran Wholesale Distributors',
+                'phone' => '0777999888',
+                'email' => 'wholesale@imran.com',
+                'company_name' => 'Imran Accessories Ltd',
+                'address' => 'Pettah Wholesale Market, Colombo 11',
+            ],
+            [
+                'name' => 'Colombo Mobile Hub',
+                'phone' => '0777001100',
+                'email' => 'sales@cmbmobilehub.test',
+                'company_name' => 'Colombo Mobile Hub Pvt Ltd',
+                'address' => '1st Cross Street, Colombo 11',
+            ],
+            [
+                'name' => 'Galaxy Accessories Lanka',
+                'phone' => '0777002200',
+                'email' => 'orders@galaxyaccessories.test',
+                'company_name' => 'Galaxy Accessories Lanka',
+                'address' => 'Main Street, Kandy',
+            ],
+            [
+                'name' => 'Quick Charge Traders',
+                'phone' => '0777003300',
+                'email' => 'accounts@quickcharge.test',
+                'company_name' => 'Quick Charge Traders',
+                'address' => 'Galle Road, Dehiwala',
+            ],
+            [
+                'name' => 'Smart Cover Wholesale',
+                'phone' => '0777004400',
+                'email' => 'hello@smartcover.test',
+                'company_name' => 'Smart Cover Wholesale',
+                'address' => 'Negombo Road, Wattala',
+            ],
+        ];
+
+        foreach ($suppliers as $supplier) {
+            Supplier::query()->updateOrCreate(
+                ['phone' => $supplier['phone']],
+                [
+                    'name' => $supplier['name'],
+                    'email' => $supplier['email'],
+                    'company_name' => $supplier['company_name'],
+                    'address' => $supplier['address'],
+                    'opening_balance' => 0.00,
+                    'due_balance' => 0.00,
+                ],
+            );
+        }
 
         // 5. Seed Units
-        $pcs = Unit::query()->create(['name' => 'Pieces', 'short_name' => 'pcs', 'is_active' => true]);
-        $box = Unit::query()->create(['name' => 'Box', 'short_name' => 'box', 'is_active' => true]);
-        $set = Unit::query()->create(['name' => 'Set', 'short_name' => 'set', 'is_active' => true]);
+        $pcs = Unit::query()->updateOrCreate(['short_name' => 'pcs'], ['name' => 'Pieces', 'is_active' => true]);
+        $box = Unit::query()->updateOrCreate(['short_name' => 'box'], ['name' => 'Box', 'is_active' => true]);
+        $set = Unit::query()->updateOrCreate(['short_name' => 'set'], ['name' => 'Set', 'is_active' => true]);
 
         // 6. Seed Categories
         $cats = [
@@ -152,7 +202,7 @@ class DatabaseSeeder extends Seeder
             'Repair Spare Parts',
         ];
         foreach ($cats as $cat) {
-            Category::query()->create(['name' => $cat, 'is_active' => true]);
+            Category::query()->updateOrCreate(['name' => $cat], ['is_active' => true]);
         }
 
         // 7. Seed Brands
@@ -169,7 +219,7 @@ class DatabaseSeeder extends Seeder
             'LDNIO',
         ];
         foreach ($brands as $brand) {
-            Brand::query()->create(['name' => $brand, 'is_active' => true]);
+            Brand::query()->updateOrCreate(['name' => $brand], ['is_active' => true]);
         }
 
         $this->call(SampleProductsSeeder::class);

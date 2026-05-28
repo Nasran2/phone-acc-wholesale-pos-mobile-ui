@@ -83,6 +83,10 @@ class AccountingLedgerService
             ->whereDate('date', '>=', $startDate)
             ->whereDate('date', '<=', $endDate)
             ->whereHasMorph('paymentable', [Supplier::class, Purchase::class])
+            ->where(function ($query): void {
+                $query->where('payment_method', '!=', 'cheque')
+                    ->orWhere('cheque_status', 'passed');
+            })
             ->when($paymentMethod, fn ($query) => $query->where('payment_method', $paymentMethod))
             ->when($search, function ($query, string $term): void {
                 $query->where(function ($query) use ($term): void {

@@ -7,9 +7,13 @@
     $businessEmail = Setting::get('business_email');
     $footerNote = Setting::get('invoice_footer_note');
     $terms = Setting::get('invoice_terms') ?: __('Goods once sold are not refundable except under approved return policy.');
+    $currency = Setting::get('currency_symbol', 'Rs');
     $primaryPayment = $sale->payments->first();
     $paymentMethod = str_replace('_', ' ', $primaryPayment?->payment_method ?? $sale->payment_status ?? 'cash');
     $blankRows = max(0, 3 - $sale->items->count());
+    $statusLabel = str((string) $sale->payment_status)->replace('_', ' ')->headline()->toString();
+    $hasTax = (float) $sale->tax_amount > 0;
+    $hasDiscount = (float) $sale->discount_amount > 0;
     $customerPhone = trim((string) ($sale->customer?->phone ?? ''));
     $customerAddress = trim((string) ($sale->customer?->address ?? ''));
     $hiddenValues = ['', '0', '0000000000', 'n/a', 'na', '-'];
@@ -64,13 +68,13 @@
 
     <div class="relative mx-auto flex h-[281mm] w-[194mm] flex-col overflow-hidden bg-white p-[8mm] text-slate-800">
         <!-- Top accent gradient line -->
-        <div class="absolute left-0 top-0 h-1.5 w-full bg-gradient-to-r from-violet-600 via-indigo-500 to-sky-500"></div>
+        <div class="absolute left-0 top-0 h-1.5 w-full bg-gradient-to-r from-violet-600 via-indigo-500 to-cyan-500"></div>
 
         <!-- Header -->
         <header class="flex items-start justify-between gap-8 border-b border-slate-100 pb-5 pt-2">
             <div>
-                <p class="text-[10px] font-bold uppercase tracking-[0.25em] text-violet-600">{{ __('Tax Invoice') }}</p>
-                <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-900">INVOICE</h1>
+                <p class="text-[10px] font-bold uppercase tracking-[0.25em] text-violet-600">{{ __('Retail Bill') }}</p>
+                <h1 class="mt-1 text-3xl font-black tracking-tight text-slate-900">{{ __('INVOICE') }}</h1>
                 <div class="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 border border-slate-100">
                     <span class="text-slate-400">No:</span>
                     <span class="font-bold text-slate-900">{{ $sale->invoice_no }}</span>
@@ -123,7 +127,12 @@
                     <span class="font-bold text-violet-600 uppercase">{{ $paymentMethod }}</span>
 
                     <span class="text-slate-400 font-medium">{{ __('Status') }}:</span>
-                    <span class="font-bold text-emerald-600 uppercase">{{ __('Paid') }}</span>
+                    <span @class([
+                        'font-bold uppercase',
+                        'text-emerald-600' => $sale->payment_status === 'paid',
+                        'text-amber-600' => in_array($sale->payment_status, ['partial', 'cheque_pending'], true),
+                        'text-rose-600' => $sale->payment_status === 'due',
+                    ])>{{ $statusLabel }}</span>
                 </div>
             </div>
         </section>
@@ -146,8 +155,8 @@
                             <td class="py-2 text-center font-bold text-violet-600">{{ $item->quantity }}</td>
                             <td class="px-2 py-2 font-mono text-[10px] text-slate-500">{{ $item->product?->sku ?: $item->product_id }}</td>
                             <td class="px-2 py-2 font-medium text-slate-800">{{ $item->product?->name }}</td>
-                            <td class="px-2 py-2 text-right">Rs {{ number_format($item->selling_price, 2) }}</td>
-                            <td class="py-2 text-right font-semibold text-slate-900">Rs {{ number_format($item->subtotal, 2) }}</td>
+                            <td class="px-2 py-2 text-right">{{ $currency }} {{ number_format($item->selling_price, 2) }}</td>
+                            <td class="py-2 text-right font-semibold text-slate-900">{{ $currency }} {{ number_format($item->subtotal, 2) }}</td>
                         </tr>
                     @endforeach
 
@@ -178,39 +187,41 @@
             <div class="rounded-lg border border-slate-100 bg-slate-50/20 text-xs font-semibold overflow-hidden">
                 <div class="grid grid-cols-2 px-3 py-2 border-b border-slate-100">
                     <div class="text-slate-400">Subtotal</div>
-                    <div class="text-right text-slate-700">Rs {{ number_format($sale->subtotal_amount, 2) }}</div>
+                    <div class="text-right text-slate-700">{{ $currency }} {{ number_format($sale->subtotal_amount, 2) }}</div>
                 </div>
-                <div class="grid grid-cols-2 px-3 py-2 border-b border-slate-100">
-                    <div class="text-slate-400">Sales Tax</div>
-                    <div class="text-right text-slate-700">Rs {{ number_format($sale->tax_amount, 2) }}</div>
-                </div>
-                @if ($sale->discount_amount > 0)
+                @if ($hasDiscount)
                     <div class="grid grid-cols-2 px-3 py-2 border-b border-slate-100 text-rose-600 bg-rose-50/20">
                         <div>Discount</div>
-                        <div class="text-right">- Rs {{ number_format($sale->discount_amount, 2) }}</div>
+                        <div class="text-right">- {{ $currency }} {{ number_format($sale->discount_amount, 2) }}</div>
+                    </div>
+                @endif
+                @if ($hasTax)
+                    <div class="grid grid-cols-2 px-3 py-2 border-b border-slate-100">
+                        <div class="text-slate-400">Tax</div>
+                        <div class="text-right text-slate-700">{{ $currency }} {{ number_format($sale->tax_amount, 2) }}</div>
                     </div>
                 @endif
                 <div class="grid grid-cols-2 bg-gradient-to-r from-violet-600 to-indigo-600 text-white px-3 py-2.5 font-bold">
                     <div>TOTAL</div>
-                    <div class="text-right">Rs {{ number_format($sale->grand_total, 2) }}</div>
+                    <div class="text-right">{{ $currency }} {{ number_format($sale->grand_total, 2) }}</div>
                 </div>
                 @if($sale->payments->count() > 0)
                     <div class="border-t border-slate-100 bg-slate-50/50">
                         @foreach($sale->payments as $payment)
                             <div class="grid grid-cols-2 px-3 py-1.5 border-b border-slate-100/50 text-[10px] text-slate-500">
                                 <div>{{ __('Payment') }} ({{ $payment->date->format('d M Y') }})</div>
-                                <div class="text-right">Rs {{ number_format($payment->amount, 2) }}</div>
+                                <div class="text-right">{{ $currency }} {{ number_format($payment->amount, 2) }}</div>
                             </div>
                         @endforeach
                     </div>
                 @endif
                 <div class="grid grid-cols-2 px-3 py-2 border-t border-slate-100 font-semibold bg-white text-slate-600">
                     <div>{{ __('Total Paid') }}</div>
-                    <div class="text-right text-emerald-600 font-bold">Rs {{ number_format($sale->paid_amount, 2) }}</div>
+                    <div class="text-right text-emerald-600 font-bold">{{ $currency }} {{ number_format($sale->paid_amount, 2) }}</div>
                 </div>
                 <div class="grid grid-cols-2 px-3 py-2 font-bold {{ $sale->due_amount > 0 ? 'bg-rose-50 text-rose-600' : 'bg-slate-50 text-slate-400' }}">
                     <div>{{ __('Due Balance') }}</div>
-                    <div class="text-right">Rs {{ number_format($sale->due_amount, 2) }}</div>
+                    <div class="text-right">{{ $currency }} {{ number_format($sale->due_amount, 2) }}</div>
                 </div>
             </div>
         </section>

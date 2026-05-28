@@ -740,19 +740,21 @@
             <!-- FULL-SCREEN MOBILE OVERLAY NAV DRAWER -->
             <div
             x-show="mobileMenuOpen"
+            @keydown.escape.window="mobileMenuOpen = false"
+            @click.self="mobileMenuOpen = false"
             x-transition:enter="transition ease-out duration-300"
-            x-transition:enter-start="opacity-0 translate-x-full"
+            x-transition:enter-start="opacity-0 -translate-x-full"
             x-transition:enter-end="opacity-100 translate-x-0"
             x-transition:leave="transition ease-in duration-200"
             x-transition:leave-start="opacity-100 translate-x-0"
-            x-transition:leave-end="opacity-0 translate-x-full"
-            class="fixed inset-0 z-50 flex lg:hidden bg-zinc-950/40 backdrop-blur-md"
+            x-transition:leave-end="opacity-0 -translate-x-full"
+            class="fixed inset-0 z-50 flex items-stretch lg:hidden bg-zinc-950/40 backdrop-blur-md"
             style="display: none;"
         >
-            <div class="ml-auto w-80 max-w-full bg-white/95 backdrop-blur-2xl border-l border-zinc-100 p-6 flex flex-col justify-between shadow-2xl dark:bg-zinc-900/95 dark:border-zinc-800">
-                <div>
+            <div class="mr-auto flex h-full w-80 max-w-[88vw] flex-col border-r border-zinc-100 bg-white/95 p-5 shadow-2xl backdrop-blur-2xl dark:border-zinc-800 dark:bg-zinc-900/95">
+                <div class="flex min-h-0 flex-1 flex-col">
                     <!-- Header -->
-                    <div class="flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800 pb-4">
+                    <div class="flex shrink-0 items-center justify-between border-b border-zinc-100 pb-4 dark:border-zinc-800">
                         <div>
                             <p class="text-[10px] font-black uppercase tracking-widest text-violet-600 dark:text-violet-400">Retail Core</p>
                             <h3 class="font-display text-lg font-bold text-zinc-950 dark:text-zinc-50">Navigation</h3>
@@ -761,13 +763,14 @@
                             type="button"
                             @click="mobileMenuOpen = false"
                             class="flex h-8 w-8 items-center justify-center rounded-full border border-zinc-200 text-zinc-400 hover:text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+                            aria-label="{{ __('Close navigation') }}"
                         >
                             <flux:icon.x-mark class="size-4" />
                         </button>
                     </div>
 
                     <!-- Scrollable menu inside drawer -->
-                    <div class="mt-6 max-h-[70vh] overflow-y-auto pr-1 scrollbar-none">
+                    <div class="mt-5 flex-1 overflow-y-auto pb-4 pr-1 no-scrollbar">
                         <p class="mb-3 px-3 text-[10px] font-black uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
                             {{ __('MAIN') }}
                         </p>
@@ -940,7 +943,7 @@
                     </div>
                 </div>
 
-                <div class="border-t border-zinc-100 dark:border-zinc-800 pt-4 mt-auto">
+                <div class="mt-4 shrink-0 border-t border-zinc-100 pt-4 dark:border-zinc-800">
                     <form method="POST" action="{{ route('logout') }}">
                         @csrf
                         <button type="submit" class="flex w-full items-center justify-center gap-3 rounded-xl bg-rose-50 px-4 py-2.5 text-sm font-bold text-rose-600 hover:bg-rose-100 transition active:scale-95 duration-150 dark:bg-rose-950/20 dark:text-rose-400">

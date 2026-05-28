@@ -11,6 +11,7 @@ use Flux\Flux;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
+use Illuminate\Support\Facades\DB;
 
 new #[Title('Record Wholesale Purchase')] class extends Component
 {
@@ -27,6 +28,12 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     public $paid_amount = 0.00;
     public string $payment_method = 'cash';
     public string $payment_reference = '';
+    public string $cheque_type = 'party';
+    public string $cheque_bank = '';
+    public string $cheque_no = '';
+    public string $cheque_date = '';
+    public string $party_cheque_search = '';
+    public ?int $party_cheque_payment_id = null;
     public string $notes = '';
 
     public function mount(): void
@@ -52,6 +59,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                 $this->cart[$index]['quantity']++;
                 $this->cart[$index]['subtotal'] = $this->cart[$index]['quantity'] * $this->cart[$index]['cost_price'];
                 $this->productSearch = '';
+                $this->syncAutoPaidAmount();
                 return;
             }
         }
@@ -68,6 +76,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
         ];
 
         $this->productSearch = '';
+        $this->syncAutoPaidAmount();
     }
 
     public function updateCartRow(int $index, string $field, $value): void
@@ -83,6 +92,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
             // Recalculate row subtotal
             $this->cart[$index]['subtotal'] = $this->cart[$index]['quantity'] * $this->cart[$index]['cost_price'];
+            $this->syncAutoPaidAmount();
         }
     }
 
@@ -91,12 +101,30 @@ new #[Title('Record Wholesale Purchase')] class extends Component
         if (isset($this->cart[$index])) {
             unset($this->cart[$index]);
             $this->cart = array_values($this->cart);
+            $this->syncAutoPaidAmount();
+        }
+    }
+
+    public function updatedPaymentMethod(): void
+    {
+        $this->syncAutoPaidAmount();
+    }
+
+    public function updatedDiscount(): void
+    {
+        $this->syncAutoPaidAmount();
+    }
+
+    private function syncAutoPaidAmount(): void
+    {
+        if (in_array($this->payment_method, ['cash', 'bank_transfer'], true)) {
+            $this->paid_amount = max(0.00, (float) $this->cartTotal);
         }
     }
 
     public function savePurchase(): void
     {
-        $this->validate([
+        $rules = [
             'invoice_no' => 'required|string|unique:purchases,invoice_no',
             'date' => 'required|date',
             'supplier_id' => 'required|exists:suppliers,id',
@@ -107,70 +135,102 @@ new #[Title('Record Wholesale Purchase')] class extends Component
             'cart.*.selling_price' => 'required|numeric|min:0',
             'discount' => 'required|numeric|min:0',
             'paid_amount' => 'required|numeric|min:0',
-            'payment_method' => 'required|string',
-        ]);
+            'payment_method' => 'required|in:cash,bank_transfer,cheque',
+        ];
+
+        if ($this->payment_method === 'cheque') {
+            $rules['paid_amount'] = 'required|numeric|min:0.01';
+            $rules['cheque_type'] = 'required|in:own,party';
+            $rules['cheque_date'] = 'required_if:cheque_type,own|nullable|date';
+            $rules['cheque_no'] = 'required_if:cheque_type,own|nullable|string|max:100';
+            $rules['cheque_bank'] = 'nullable|string|max:100';
+            $rules['party_cheque_payment_id'] = 'required_if:cheque_type,party|nullable|exists:payments,id';
+        }
+
+        $this->validate($rules);
 
         $subtotal = $this->cartSubtotal;
         $grandTotal = $subtotal - (float) $this->discount;
-        $dueAmount = max(0.00, $grandTotal - (float) $this->paid_amount);
+        $isChequePayment = $this->payment_method === 'cheque';
+        $partyCheque = $this->selectedPartyCheque;
 
-        $paymentStatus = 'due';
-        if ((float) $this->paid_amount >= $grandTotal) {
+        if ($isChequePayment && $this->cheque_type === 'party' && (! $partyCheque || (float) $this->paid_amount > (float) $partyCheque->amount)) {
+            $this->addError('paid_amount', __('Party cheque amount cannot exceed the selected customer cheque amount.'));
+
+            return;
+        }
+
+        $paymentAmount = min((float) $this->paid_amount, $grandTotal);
+        $capturedPaidAmount = $isChequePayment ? 0.00 : $paymentAmount;
+        $heldChequeAmount = $isChequePayment ? $paymentAmount : 0.00;
+        $dueAmount = max(0.00, $grandTotal - $capturedPaidAmount - $heldChequeAmount);
+
+        $paymentStatus = $isChequePayment ? ($dueAmount > 0 ? 'partial' : 'cheque_pending') : 'due';
+        if (! $isChequePayment && $capturedPaidAmount >= $grandTotal) {
             $paymentStatus = 'paid';
-        } elseif ((float) $this->paid_amount > 0) {
+        } elseif (! $isChequePayment && $capturedPaidAmount > 0) {
             $paymentStatus = 'partial';
         }
 
-        // 1. Create Purchase Invoice
-        $purchase = Purchase::query()->create([
-            'supplier_id' => $this->supplier_id,
-            'invoice_no' => $this->invoice_no,
-            'date' => $this->date,
-            'total_amount' => $subtotal,
-            'discount' => (float) $this->discount,
-            'tax' => 0.0,
-            'grand_total' => $grandTotal,
-            'paid_amount' => (float) $this->paid_amount,
-            'due_amount' => $dueAmount,
-            'payment_status' => $paymentStatus,
-            'notes' => $this->notes,
-        ]);
-
-        // 2. Process Cart Items
-        foreach ($this->cart as $item) {
-            $purchase->items()->create([
-                'product_id' => $item['product_id'],
-                'quantity' => $item['quantity'],
-                'cost_price' => $item['cost_price'],
-                'selling_price' => $item['selling_price'],
-                'subtotal' => $item['subtotal'],
-            ]);
-
-            // Adjust inventory stock levels & pricing defaults
-            $product = Product::query()->findOrFail($item['product_id']);
-            $product->increment('stock_quantity', $item['quantity']);
-            $product->update([
-                'cost_price' => $item['cost_price'],
-                'selling_price' => $item['selling_price'],
-            ]);
-        }
-
-        // 3. Log outward payment if paid
-        if ((float) $this->paid_amount > 0) {
-            $purchase->payments()->create([
-                'amount' => (float) $this->paid_amount,
-                'payment_method' => $this->payment_method,
+        DB::transaction(function () use ($subtotal, $grandTotal, $capturedPaidAmount, $dueAmount, $paymentStatus, $paymentAmount, $isChequePayment, $partyCheque): void {
+            // 1. Create Purchase Invoice
+            $purchase = Purchase::query()->create([
+                'supplier_id' => $this->supplier_id,
+                'invoice_no' => $this->invoice_no,
                 'date' => $this->date,
-                'reference' => $this->payment_reference,
-                'notes' => 'Restock purchase invoice payments.',
+                'total_amount' => $subtotal,
+                'discount' => (float) $this->discount,
+                'tax' => 0.0,
+                'grand_total' => $grandTotal,
+                'paid_amount' => $capturedPaidAmount,
+                'due_amount' => $dueAmount,
+                'payment_status' => $paymentStatus,
+                'notes' => $this->notes,
             ]);
-        }
 
-        // 4. Update supplier outstanding accounts payable due
-        if ($dueAmount > 0) {
-            $supplier = Supplier::query()->findOrFail($this->supplier_id);
-            $supplier->increment('due_balance', $dueAmount);
-        }
+            // 2. Process Cart Items
+            foreach ($this->cart as $item) {
+                $purchase->items()->create([
+                    'product_id' => $item['product_id'],
+                    'quantity' => $item['quantity'],
+                    'cost_price' => $item['cost_price'],
+                    'selling_price' => $item['selling_price'],
+                    'subtotal' => $item['subtotal'],
+                ]);
+
+                // Adjust inventory stock levels & pricing defaults
+                $product = Product::query()->findOrFail($item['product_id']);
+                $product->increment('stock_quantity', $item['quantity']);
+                $product->update([
+                    'cost_price' => $item['cost_price'],
+                    'selling_price' => $item['selling_price'],
+                ]);
+            }
+
+            // 3. Log outward payment or cheque hold if paid
+            if ($paymentAmount > 0) {
+                $purchase->payments()->create([
+                    'amount' => $paymentAmount,
+                    'payment_method' => $this->payment_method,
+                    'date' => $this->date,
+                    'reference' => $isChequePayment ? ($this->cheque_type === 'party' ? $partyCheque?->cheque_no : $this->cheque_no) : $this->payment_reference,
+                    'cheque_bank' => $isChequePayment ? ($this->cheque_type === 'party' ? $partyCheque?->cheque_bank : $this->cheque_bank) : null,
+                    'cheque_no' => $isChequePayment ? ($this->cheque_type === 'party' ? $partyCheque?->cheque_no : $this->cheque_no) : null,
+                    'cheque_date' => $isChequePayment ? ($this->cheque_type === 'party' ? $partyCheque?->cheque_date : $this->cheque_date) : null,
+                    'cheque_status' => $isChequePayment ? 'pending' : null,
+                    'cheque_type' => $isChequePayment ? $this->cheque_type : null,
+                    'source_payment_id' => $isChequePayment && $this->cheque_type === 'party' ? $partyCheque?->id : null,
+                    'party_customer_id' => $isChequePayment && $this->cheque_type === 'party' ? $partyCheque?->paymentable?->customer_id : null,
+                    'notes' => $isChequePayment ? 'Supplier cheque payment on hold until cleared.' : 'Restock purchase invoice payments.',
+                ]);
+            }
+
+            // 4. Update supplier outstanding accounts payable due
+            if ($dueAmount > 0) {
+                $supplier = Supplier::query()->findOrFail($this->supplier_id);
+                $supplier->increment('due_balance', $dueAmount);
+            }
+        });
 
         ActivityLogger::log('purchase_create', "Registered restock invoice {$this->invoice_no}. Total: Rs {$grandTotal}, Supplier Dues: Rs {$dueAmount}.");
         Flux::toast(variant: 'success', text: __('Purchase restock successfully recorded.'));
@@ -198,6 +258,53 @@ new #[Title('Record Wholesale Purchase')] class extends Component
             })
             ->limit(5)
             ->get();
+    }
+
+    #[Computed]
+    public function partyCheques()
+    {
+        if (empty($this->party_cheque_search)) {
+            return [];
+        }
+
+        return \App\Models\Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->whereDoesntHave('issuedPayments', fn ($query) => $query->where('cheque_status', 'pending'))
+            ->where(function ($query): void {
+                $query->where('cheque_no', 'like', '%' . $this->party_cheque_search . '%')
+                    ->orWhere('reference', 'like', '%' . $this->party_cheque_search . '%');
+            })
+            ->with('paymentable.customer')
+            ->limit(5)
+            ->get();
+    }
+
+    #[Computed]
+    public function selectedPartyCheque()
+    {
+        if (! $this->party_cheque_payment_id) {
+            return null;
+        }
+
+        return \App\Models\Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->with('paymentable.customer')
+            ->find($this->party_cheque_payment_id);
+    }
+
+    public function selectPartyCheque(int $paymentId): void
+    {
+        $payment = \App\Models\Payment::query()
+            ->pendingCheque()
+            ->where('paymentable_type', \App\Models\Sale::class)
+            ->with('paymentable.customer')
+            ->findOrFail($paymentId);
+
+        $this->party_cheque_payment_id = $payment->id;
+        $this->party_cheque_search = $payment->cheque_no ?: (string) $payment->reference;
+        $this->paid_amount = min((float) $payment->amount, $this->cartTotal);
     }
 
     #[Computed]
@@ -386,20 +493,77 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                 <div class="flex flex-col gap-4">
                     <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{{ __('Capture Outward Payment') }}</h4>
 
-                    <flux:input wire:model.live.number="paid_amount" :label="__('Cash / Bank Amount Paid (Rs)')" type="number" step="0.01" />
+                    <flux:input wire:model.live.number="paid_amount" :label="$payment_method === 'cheque' ? __('Cheque Amount (Rs)') : __('Cash / Bank Amount Paid (Rs)')" type="number" step="0.01" />
 
                     @if ($paid_amount > 0)
-                        <flux:select wire:model="payment_method" :label="__('Paid Account')">
+                        <flux:select wire:model.live="payment_method" :label="__('Paid Account')">
                             <option value="cash">Cash Account</option>
-                            <option value="card">Business Debit Card</option>
                             <option value="bank_transfer">Direct Bank Transfer</option>
+                            <option value="cheque">Cheque Hold</option>
                         </flux:select>
-                        <flux:input wire:model="payment_reference" :label="__('Transaction Receipt Reference')" placeholder="e.g. Bank slip #" />
+
+                        @if ($payment_method === 'cheque')
+                            <flux:select wire:model.live="cheque_type" :label="__('Cheque Type')">
+                                <option value="own">{{ __('Own Cheque') }}</option>
+                                <option value="party">{{ __('Party Cheque') }}</option>
+                            </flux:select>
+
+                            @if ($cheque_type === 'own')
+                                <div class="grid gap-3 sm:grid-cols-2">
+                                    <flux:input wire:model="cheque_no" :label="__('Own Cheque No')" placeholder="Cheque number" required />
+                                    <flux:input wire:model="cheque_bank" :label="__('Bank')" placeholder="Bank name" />
+                                </div>
+                                <flux:input wire:model="cheque_date" :label="__('Cheque Date')" type="date" required />
+                                <p class="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                                    {{ __('Own cheques are shown on the dashboard from 3 days before the cheque date and become cash out when marked passed.') }}
+                                </p>
+                            @else
+                                <div class="relative" x-data="{ open: false }" @click.away="open = false">
+                                    <flux:input wire:model.live.debounce.150ms="party_cheque_search" :label="__('Customer Cheque No')" placeholder="Search pending customer cheque..." @focus="open = true" required />
+
+                                    @if (count($this->partyCheques) > 0)
+                                        <div x-cloak x-show="open" class="absolute z-40 mt-2 max-h-60 w-full overflow-y-auto rounded-2xl border border-zinc-100 bg-white p-2 shadow-xl">
+                                            @foreach ($this->partyCheques as $partyCheque)
+                                                @php($partySale = $partyCheque->paymentable)
+                                                <button type="button" wire:click="selectPartyCheque({{ $partyCheque->id }})" @click="open = false" class="w-full rounded-xl p-3 text-left transition hover:bg-zinc-50">
+                                                    <div class="flex items-center justify-between gap-3">
+                                                        <span class="text-sm font-bold text-zinc-900">{{ $partyCheque->cheque_no ?: $partyCheque->reference }}</span>
+                                                        <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
+                                                    </div>
+                                                    <p class="mt-0.5 text-xs text-zinc-500">
+                                                        {{ $partySale?->customer?->name ?? __('Unknown Customer') }} · {{ $partySale?->invoice_no }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                                    </p>
+                                                </button>
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                </div>
+
+                                @if ($this->selectedPartyCheque)
+                                    @php($selectedPartySale = $this->selectedPartyCheque->paymentable)
+                                    <div class="rounded-2xl border border-violet-100 bg-violet-50 p-3 text-xs text-violet-900">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <span class="font-black">{{ $this->selectedPartyCheque->cheque_no ?: $this->selectedPartyCheque->reference }}</span>
+                                            <span class="font-black">Rs {{ number_format($this->selectedPartyCheque->amount, 2) }}</span>
+                                        </div>
+                                        <p class="mt-1 font-semibold">
+                                            {{ $selectedPartySale?->customer?->name ?? __('Unknown Customer') }} · {{ __('Due') }} {{ $this->selectedPartyCheque->cheque_date?->format('Y-m-d') }}
+                                        </p>
+                                    </div>
+                                @endif
+
+                                <p class="rounded-2xl border border-amber-100 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                                    {{ __('Party cheques are shown separately on the dashboard from 2 days before the cheque date with supplier bill, supplier, customer, passed, and return actions.') }}
+                                </p>
+                            @endif
+                        @else
+                            <flux:input wire:model="payment_reference" :label="__('Transaction Receipt Reference')" placeholder="e.g. Bank slip #" />
+                        @endif
                     @endif
 
                     <div class="flex justify-between text-sm rounded-2xl bg-zinc-50 p-4 border border-zinc-100">
                         <span class="text-zinc-500 font-medium">Outstanding Vendor Due</span>
-                        <span class="font-bold text-rose-600">Rs {{ number_format(max(0.00, $this->cartTotal - (float) $this->paid_amount), 2) }}</span>
+                        <span class="font-bold text-rose-600">Rs {{ number_format($payment_method === 'cheque' ? max(0.00, $this->cartTotal - min((float) $paid_amount, $this->cartTotal)) : max(0.00, $this->cartTotal - (float) $this->paid_amount), 2) }}</span>
                     </div>
 
                     <flux:textarea wire:model="notes" :label="__('Internal restock details')" rows="2" />
