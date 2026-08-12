@@ -1000,7 +1000,9 @@ new #[Title('Sales Receipts')] class extends Component
             <form wire:submit="submitReturn" class="border-t border-zinc-100 pt-3 flex flex-col gap-3">
                 <flux:select wire:model="returnType" :label="__('Return Compensation Mode')">
                     <option value="cash_refund">Cash Refund (Withdraw cash)</option>
-                    @if ($this->selectedSale?->due_amount > 0)
+                    @if (App\Models\Sale::find($this->viewingSaleId)?->customer?->due_balance > 0)
+                        <option value="adjust_due">{{ __('Reduce customer due') }} (Rs {{ number_format(App\Models\Sale::find($this->viewingSaleId)->customer->due_balance, 2) }})</option>
+                    @elseif (App\Models\Sale::find($this->viewingSaleId)?->due_amount > 0)
                         <option value="adjust_due">Reduce Invoice Due Account Balance</option>
                     @endif
                     <option value="exchange">Same Product Exchange (Record cost as expense)</option>

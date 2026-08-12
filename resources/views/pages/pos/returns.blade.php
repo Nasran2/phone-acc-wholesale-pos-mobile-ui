@@ -237,8 +237,10 @@ new #[Title('POS Returns')] class extends Component
                 <form wire:submit="submitReturn" class="mt-4 flex flex-col gap-4">
                     <flux:select wire:model.live="returnType" :label="__('Return action')">
                         <option value="exchange">{{ __('Same product exchange') }}</option>
-                        @if ($this->selectedSale->due_amount > 0)
-                            <option value="adjust_due">{{ __('Reduce customer due') }}</option>
+                        @if ($this->selectedSale->customer && $this->selectedSale->customer->due_balance > 0)
+                            <option value="adjust_due">{{ __('Reduce customer due') }} (Rs {{ number_format($this->selectedSale->customer->due_balance, 2) }})</option>
+                        @elseif ($this->selectedSale->due_amount > 0)
+                            <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format($this->selectedSale->due_amount, 2) }})</option>
                         @endif
                         <option value="cash_refund">{{ __('Cash refund') }}</option>
                     </flux:select>
@@ -252,6 +254,12 @@ new #[Title('POS Returns')] class extends Component
                             <span class="text-zinc-500">{{ __('Invoice due') }}</span>
                             <span class="font-bold text-rose-600">{{ __('Rs') }} {{ number_format((float) $this->selectedSale->due_amount, 2) }}</span>
                         </div>
+                        @if ($this->selectedSale->customer)
+                            <div class="mt-2 flex items-center justify-between text-xs">
+                                <span class="text-zinc-500">{{ __('Customer Total due') }}</span>
+                                <span class="font-bold text-rose-600">{{ __('Rs') }} {{ number_format((float) $this->selectedSale->customer->due_balance, 2) }}</span>
+                            </div>
+                        @endif
                     </div>
 
                     <flux:textarea wire:model="returnNotes" :label="__('Notes')" rows="3" placeholder="Reason or condition of returned product." />
