@@ -243,4 +243,68 @@ class SaleReturnService
 
         return $returnNo;
     }
+    public function revert(SaleReturn $return): void
+    {
+        DB::transaction(function () use ($return) {
+            $return->loadMissing(['sale.customer', 'items.product', 'payments']);
+
+            $sale = $return->sale;
+            $customer = $sale?->customer;
+            $returnType = $return->return_type;
+
+            // Revert stock changes for each item
+            foreach ($return->items as $item) {
+                $product = $item->product;
+                if ($product && $product->manage_stock) {
+                    if ($returnType === 'exchange') {
+                        // Exchange originally decremented stock, so we increment it back
+                        $product->increment('stock_quantity', $item->quantity);
+                    } else {
+                        // Cash refund or adjust due originally incremented stock, so we decrement it back
+                        $product->decrement('stock_quantity', $item->quantity);
+                    }
+                }
+            }
+
+            // Revert due balances if it was an adjust_due return
+            if ($returnType === 'adjust_due' && $return->adjusted_amount > 0 && $sale) {
+                $sale->update([
+                    'due_amount' => round((float) $sale->due_amount + (float) $return->adjusted_amount, 2),
+                ]);
+
+                if ((float) $sale->due_amount <= 0) {
+                    $sale->update(['payment_status' => 'paid']);
+                } elseif ((float) $sale->paid_amount > 0) {
+                    $sale->update(['payment_status' => 'partial']);
+                } else {
+                    $sale->update(['payment_status' => 'due']);
+                }
+
+                if ($customer) {
+                    $customer->update([
+                        'due_balance' => round((float) $customer->due_balance + (float) $return->adjusted_amount, 2),
+                    ]);
+                }
+            }
+
+            // Delete associated cash refund payments
+            if ($returnType === 'cash_refund' && $return->payments()->exists()) {
+                $return->payments()->delete();
+            }
+
+            // Delete associated expense for exchange returns
+            if ($returnType === 'exchange') {
+                Expense::query()
+                    ->where('reference', $return->invoice_no)
+                    ->where('category', 'Product Return Replacement Cost')
+                    ->delete();
+            }
+
+            ActivityLogger::log('pos_return_revert', "Reverted Customer Return {$return->invoice_no} for invoice " . ($sale?->invoice_no ?? 'Unknown') . ".");
+
+            // Delete the return items and the return itself
+            $return->items()->delete();
+            $return->delete();
+        });
+    }
 }

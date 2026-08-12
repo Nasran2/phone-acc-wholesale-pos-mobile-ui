@@ -156,6 +156,20 @@ new #[Title('Sales Receipts')] class extends Component
         $this->closeInvoice();
     }
 
+    public function revertReturn(int $returnId, SaleReturnService $returnService): void
+    {
+        if (! auth()->user()->hasPermission('process_return')) {
+            Flux::toast(variant: 'danger', text: __('You do not have authorization to revert returns.'));
+            return;
+        }
+
+        $saleReturn = \App\Models\SaleReturn::query()->findOrFail($returnId);
+
+        $returnService->revert($saleReturn);
+
+        Flux::toast(variant: 'success', text: __('Return reverted successfully.'));
+    }
+
     public function deleteSale(): void
     {
         $invoiceNo = '';
@@ -820,7 +834,18 @@ new #[Title('Sales Receipts')] class extends Component
                                 <div class="flex flex-col gap-2 rounded-2xl bg-rose-50/20 border border-rose-100 p-3 text-xs">
                                     <div class="flex justify-between items-center font-bold text-zinc-900">
                                         <span>{{ $ret->invoice_no }}</span>
-                                        <span class="text-rose-600">Rs {{ number_format($ret->refund_amount + $ret->adjusted_amount, 2) }}</span>
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-rose-600">Rs {{ number_format($ret->refund_amount + $ret->adjusted_amount, 2) }}</span>
+                                            <button
+                                                type="button"
+                                                wire:click="revertReturn({{ $ret->id }})"
+                                                wire:confirm="Are you sure you want to completely revert and delete this return log? This action will restore stock and financials."
+                                                class="text-zinc-400 hover:text-rose-600 transition"
+                                                title="Revert Return"
+                                            >
+                                                <flux:icon.trash class="size-4" />
+                                            </button>
+                                        </div>
                                     </div>
                                     <span class="text-[10px] text-zinc-400">{{ $ret->date->format('Y-m-d') }} | Type: {{ str_replace('_', ' ', strtoupper($ret->return_type)) }}</span>
 
