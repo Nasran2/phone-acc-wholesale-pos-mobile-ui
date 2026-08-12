@@ -35,10 +35,15 @@ class SaleReturnService
             ]);
         }
 
-        if ($returnType === 'adjust_due' && (float) $sale->due_amount <= 0) {
-            throw ValidationException::withMessages([
-                'returnType' => __('No outstanding dues exist on this invoice to adjust.'),
-            ]);
+        if ($returnType === 'adjust_due') {
+            $customerDue = $sale->customer ? (float) $sale->customer->due_balance : 0.0;
+            $maxAdjustable = max((float) $sale->due_amount, $customerDue);
+            
+            if ($maxAdjustable <= 0) {
+                throw ValidationException::withMessages([
+                    'returnType' => __('No outstanding dues exist for this customer or invoice to adjust.'),
+                ]);
+            }
         }
 
         return DB::transaction(function () use ($sale, $itemsToReturn, $refundTotal, $returnType, $notes): SaleReturn {
