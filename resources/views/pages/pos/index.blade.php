@@ -130,11 +130,14 @@ new #[Title('POS Terminal')] class extends Component
             $this->notes = $sale->notes ?? '';
             $this->saleDate = $sale->date?->toDateString() ?? today()->toDateString();
 
+            $legacyReturns = [];
+
             // Add items to cart
             foreach ($sale->items as $item) {
                 $product = $item->product;
                 if ($product) {
                     if ((int) $item->quantity < 0) {
+                        $legacyReturns[] = $item;
                         continue;
                     }
 
@@ -186,6 +189,37 @@ new #[Title('POS Terminal')] class extends Component
                         'return_price' => (float) $returnItem->refund_price,
                         'unit_cost' => (float) ($returnItem->product?->cost_price ?? 0),
                         'subtotal' => (float) $returnItem->subtotal,
+                    ];
+                }
+            }
+
+            // Fallback for older returns that were saved as negative items without a SaleReturn record
+            foreach ($legacyReturns as $item) {
+                $product = $item->product;
+                $alreadyLoaded = false;
+                
+                // Check if this product was already loaded via SaleReturn
+                foreach ($this->returnCredits as $credit) {
+                    if ((int) $credit['product_id'] === (int) $product->id) {
+                        $alreadyLoaded = true;
+                        break;
+                    }
+                }
+
+                if (! $alreadyLoaded) {
+                    // It's a legacy return credit item, load it!
+                    $key = 'legacy-' . $product->id;
+                    $this->returnCredits[$key] = [
+                        'sale_id' => 0, // 0 denotes legacy
+                        'invoice_no' => __('Legacy Return'),
+                        'product_id' => $product->id,
+                        'name' => (string) $product->name,
+                        'sku' => (string) $product->sku,
+                        'quantity' => abs((int) $item->quantity),
+                        'max' => abs((int) $item->quantity), // cannot determine max, default to current qty
+                        'return_price' => (float) $item->selling_price,
+                        'unit_cost' => (float) $item->cost_price,
+                        'subtotal' => abs((float) $item->subtotal),
                     ];
                 }
             }
@@ -1206,6 +1240,11 @@ new #[Title('POS Terminal')] class extends Component
     private function recordCheckoutReturnCredits(Sale $checkoutSale): void
     {
         foreach (collect($this->returnCredits)->groupBy('sale_id') as $originalSaleId => $returnCredits) {
+            // Skip creating SaleReturn record for legacy negative items missing an original sale
+            if ((int) $originalSaleId === 0) {
+                continue;
+            }
+
             $return = SaleReturn::query()->create([
                 'sale_id' => (int) $originalSaleId,
                 'customer_id' => $checkoutSale->customer_id,
