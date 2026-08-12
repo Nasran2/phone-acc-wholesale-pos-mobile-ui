@@ -367,6 +367,20 @@ new #[Title('Sales Receipts')] class extends Component
             ->with(['customer', 'items.product', 'payments', 'returns.items.product'])
             ->findOrFail($this->viewingSaleId);
     }
+
+    #[Computed]
+    public function appliedReturns()
+    {
+        if (! $this->viewingSaleId) return [];
+
+        $sale = Sale::query()->find($this->viewingSaleId);
+        if (! $sale) return [];
+
+        return \App\Models\SaleReturn::query()
+            ->with(['items.product', 'sale'])
+            ->where('notes', 'like', 'Return credited on checkout ' . $sale->invoice_no . '.%')
+            ->get();
+    }
 }; ?>
 
 <div class="flex flex-col gap-6" @payment-added.window="resetSharePdf()" x-data="{
@@ -715,7 +729,7 @@ new #[Title('Sales Receipts')] class extends Component
                     <div class="flex flex-col gap-2">
                         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1">{{ __('Products Sold') }}</h4>
 
-                        @foreach ($this->selectedSale->items as $item)
+                        @foreach ($this->selectedSale->items->filter(fn($i) => $i->quantity > 0) as $item)
                             <div class="flex items-center justify-between border-b border-zinc-100 pb-2.5 text-xs">
                                 <div>
                                     <h5 class="font-bold text-zinc-900">{{ $item->product?->name }}</h5>
@@ -749,6 +763,33 @@ new #[Title('Sales Receipts')] class extends Component
                             <span class="font-bold text-orange-600">Rs {{ number_format($this->selectedSale->grand_total, 2) }}</span>
                         </div>
                     </div>
+
+                    <!-- Credits Applied From Returns -->
+                    @if (count($this->appliedReturns) > 0)
+                        <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">
+                            <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider text-emerald-600">{{ __('Returns Applied As Credits') }}</h4>
+
+                            @foreach ($this->appliedReturns as $ret)
+                                <div class="flex flex-col gap-2 rounded-2xl bg-emerald-50/20 border border-emerald-100 p-3 text-xs">
+                                    <div class="flex justify-between items-center font-bold text-zinc-900">
+                                        <span>{{ $ret->invoice_no }} (From {{ $ret->sale?->invoice_no ?? 'Unknown' }})</span>
+                                        <span class="text-emerald-600">Rs {{ number_format($ret->adjusted_amount, 2) }}</span>
+                                    </div>
+                                    <span class="text-[10px] text-zinc-400">{{ $ret->date->format('Y-m-d') }} | Type: {{ str_replace('_', ' ', strtoupper($ret->return_type)) }}</span>
+
+                                    <!-- Items returned list in this log -->
+                                    <div class="flex flex-col gap-1 border-t border-emerald-100/50 pt-2 mt-1">
+                                        @foreach ($ret->items as $ri)
+                                            <div class="flex justify-between text-[10px] text-zinc-600">
+                                                <span>{{ $ri->product?->name }} (x{{ $ri->quantity }})</span>
+                                                <span>Rs {{ number_format($ri->subtotal, 2) }}</span>
+                                            </div>
+                                        @endforeach
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
 
                     <!-- Polymorphic payments list -->
                     <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">

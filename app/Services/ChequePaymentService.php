@@ -148,6 +148,94 @@ class ChequePaymentService
         });
     }
 
+    public function revertToPending(Payment $payment): Payment
+    {
+        return DB::transaction(function () use ($payment) {
+            $payment->refresh();
+
+            if ($payment->payment_method !== 'cheque' || $payment->cheque_status === 'pending') {
+                return $payment;
+            }
+
+            $oldStatus = $payment->cheque_status;
+
+            if ($oldStatus === 'passed') {
+                $sale = $payment->paymentable;
+                if ($sale instanceof Sale) {
+                    $sale->update([
+                        'paid_amount' => round(max(0, (float) $sale->paid_amount - (float) $payment->amount), 2),
+                    ]);
+                }
+
+                $purchase = $payment->paymentable;
+                if ($purchase instanceof Purchase) {
+                    $purchase->update([
+                        'paid_amount' => round(max(0, (float) $purchase->paid_amount - (float) $payment->amount), 2),
+                    ]);
+                }
+
+                if ($payment->cheque_type === 'party' && $payment->sourcePayment) {
+                    $sourceSale = $payment->sourcePayment->paymentable;
+                    if ($sourceSale instanceof Sale) {
+                        $sourceSale->update([
+                            'paid_amount' => round(max(0, (float) $sourceSale->paid_amount - (float) $payment->sourcePayment->amount), 2),
+                        ]);
+                    }
+                    $payment->sourcePayment->update([
+                        'cheque_status' => 'pending',
+                        'cheque_processed_at' => null,
+                    ]);
+                    if ($sourceSale instanceof Sale) {
+                        $this->syncSaleStatus($sourceSale);
+                    }
+                }
+            }
+
+            if ($oldStatus === 'returned') {
+                $customer = $payment->paymentable;
+                if ($customer instanceof Customer) {
+                    $customer->update([
+                        'due_balance' => round(max(0, (float) $customer->due_balance - (float) $payment->amount), 2),
+                    ]);
+                }
+                $supplier = $payment->paymentable;
+                if ($supplier instanceof Supplier) {
+                    $supplier->update([
+                        'due_balance' => round(max(0, (float) $supplier->due_balance - (float) $payment->amount), 2),
+                    ]);
+                }
+
+                if ($payment->cheque_type === 'party' && $payment->sourcePayment) {
+                    $payment->sourcePayment->update([
+                        'cheque_status' => 'pending',
+                        'cheque_processed_at' => null,
+                    ]);
+                    $sourceSale = $payment->sourcePayment->paymentable;
+                    if ($sourceSale instanceof Sale) {
+                        $this->syncSaleStatus($sourceSale);
+                    }
+                }
+            }
+
+            $payment->update([
+                'cheque_status' => 'pending',
+                'cheque_processed_at' => null,
+            ]);
+
+            $sale = $payment->paymentable;
+            if ($sale instanceof Sale) {
+                $this->syncSaleStatus($sale);
+            }
+
+            $purchase = $payment->paymentable;
+            if ($purchase instanceof Purchase) {
+                $this->syncPurchaseStatus($purchase);
+            }
+
+            return $payment->refresh();
+        });
+    }
+
     public function autoPassOverduePendingCheques(?CarbonInterface $today = null): int
     {
         $today ??= today();

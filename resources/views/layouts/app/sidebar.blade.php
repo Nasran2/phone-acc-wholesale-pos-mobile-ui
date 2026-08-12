@@ -574,6 +574,10 @@
                                         <flux:icon.user-group class="size-4 text-zinc-400" />
                                         <span>Customer Due Report</span>
                                     </a>
+                                    <a href="{{ route('reports.cheques') }}" wire:navigate class="flex items-center gap-2.5 py-1.5 text-sm font-medium {{ request()->routeIs('reports.cheques') ? 'text-violet-600 dark:text-violet-400' : 'text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400' }}">
+                                        <flux:icon.banknotes class="size-4 text-zinc-400" />
+                                        <span>Cheque Report</span>
+                                    </a>
                                 </div>
                             </div>
 
@@ -949,6 +953,7 @@
                                     <a href="{{ route('reports.debits') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.arrow-up-tray class="size-4 text-zinc-400" /><span>{{ __('Debit Report') }}</span></a>
                                     <a href="{{ route('reports.due-bills') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.clock class="size-4 text-zinc-400" /><span>{{ __('Due Bills Report') }}</span></a>
                                     <a href="{{ route('reports.customer-dues') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.user-group class="size-4 text-zinc-400" /><span>{{ __('Customer Due Report') }}</span></a>
+                                    <a href="{{ route('reports.cheques') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.banknotes class="size-4 text-zinc-400" /><span>{{ __('Cheque Report') }}</span></a>
                                 </div>
                             </div>
 

@@ -57,6 +57,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::livewire('reports/debits', 'pages::reports.debits')->name('reports.debits');
     Route::livewire('reports/due-bills', 'pages::reports.due-bills')->name('reports.due-bills');
     Route::livewire('reports/customer-dues', 'pages::reports.customer-dues')->name('reports.customer-dues');
+    Route::livewire('reports/cheques', 'pages::reports.cheques')->name('reports.cheques');
     Route::livewire('settings', 'pages::settings.index')->name('settings.index');
     Route::livewire('settings/business-info', 'pages::settings.business-info')->name('settings.business');
     Route::livewire('settings/general', 'pages::settings.general')->name('settings.general');
