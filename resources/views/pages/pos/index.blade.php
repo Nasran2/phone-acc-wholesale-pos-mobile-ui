@@ -134,6 +134,10 @@ new #[Title('POS Terminal')] class extends Component
             foreach ($sale->items as $item) {
                 $product = $item->product;
                 if ($product) {
+                    if ((int) $item->quantity < 0) {
+                        continue;
+                    }
+
                     $this->cart[] = [
                         'product_id' => $product->id,
                         'name' => $product->name,
@@ -143,7 +147,7 @@ new #[Title('POS Terminal')] class extends Component
                         'retail_price' => (float) $product->selling_price,
                         'wholesale_price' => (float) ($product->wholesale_price ?? $product->selling_price),
                         'price_type' => 'custom',
-                        'quantity' => $item->quantity,
+                        'quantity' => (int) $item->quantity,
                         'discount_type' => 'fixed',
                         'discount_value' => 0.00,
                         'subtotal' => (float) $item->subtotal,
@@ -151,6 +155,41 @@ new #[Title('POS Terminal')] class extends Component
                     ];
                 }
             }
+
+            // Load Return Credits for this checkout
+            $saleReturns = SaleReturn::query()
+                ->with('items.product')
+                ->where('notes', 'like', 'Return credited on checkout ' . $sale->invoice_no . '.%')
+                ->get();
+
+            foreach ($saleReturns as $saleReturn) {
+                $originalSale = Sale::query()->find($saleReturn->sale_id);
+                foreach ($saleReturn->items as $returnItem) {
+                    $key = $this->returnCreditKey($saleReturn->sale_id, $returnItem->product_id);
+
+                    $saleItemForMax = SaleItem::query()
+                        ->where('sale_id', $saleReturn->sale_id)
+                        ->where('product_id', $returnItem->product_id)
+                        ->where('quantity', '>', 0)
+                        ->first();
+
+                    $max = $saleItemForMax ? $this->maxReturnableQuantityForSaleItem($saleItemForMax) + $returnItem->quantity : $returnItem->quantity;
+
+                    $this->returnCredits[$key] = [
+                        'sale_id' => $saleReturn->sale_id,
+                        'invoice_no' => (string) ($originalSale ? $originalSale->invoice_no : ''),
+                        'product_id' => $returnItem->product_id,
+                        'name' => (string) ($returnItem->product?->name ?? __('Unknown product')),
+                        'sku' => (string) ($returnItem->product?->sku ?? ''),
+                        'quantity' => (int) $returnItem->quantity,
+                        'max' => $max,
+                        'return_price' => (float) $returnItem->refund_price,
+                        'unit_cost' => (float) ($returnItem->product?->cost_price ?? 0),
+                        'subtotal' => (float) $returnItem->subtotal,
+                    ];
+                }
+            }
+
             $this->paid_amount = (float) $sale->paid_amount;
         } else {
             $defaultCust = Customer::query()->where('name', 'Walk-in Customer')->first();
@@ -757,6 +796,13 @@ new #[Title('POS Terminal')] class extends Component
                 $oldCustomer->decrement('due_balance', $sale->due_amount);
             }
 
+            // Delete old SaleReturn records associated with this checkout
+            $oldReturns = SaleReturn::query()->where('notes', 'like', 'Return credited on checkout ' . $invoiceNo . '.%')->get();
+            foreach ($oldReturns as $oldReturn) {
+                $oldReturn->items()->delete();
+                $oldReturn->delete();
+            }
+
             $sale->items()->delete();
             $sale->payments()->delete();
 
@@ -984,7 +1030,7 @@ new #[Title('POS Terminal')] class extends Component
                     ->whereColumn('sales.id', 'sale_items.sale_id')
                     ->limit(1)
             )
-            ->orderByDesc('id')
+            ->orderByDesc('sale_items.id')
             ->limit(8)
             ->get()
             ->filter(fn(SaleItem $saleItem): bool => $this->maxReturnableQuantityForSaleItem($saleItem) > 0)
