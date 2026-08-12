@@ -326,12 +326,13 @@ new #[Title('Manage Suppliers')] class extends Component
 
         return Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', \App\Models\Sale::class)
+            ->whereIn('paymentable_type', [\App\Models\Sale::class, \App\Models\Customer::class])
             ->whereDoesntHave('issuedPayments', fn ($query) => $query->where('cheque_status', 'pending'))
             ->where(function ($query): void {
                 $query->where('cheque_no', 'like', '%'.$this->payPartyChequeSearch.'%')
                     ->orWhere('reference', 'like', '%'.$this->payPartyChequeSearch.'%')
-                    ->orWhereHasMorph('paymentable', [\App\Models\Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'));
+                    ->orWhereHasMorph('paymentable', [\App\Models\Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'))
+                    ->orWhereHasMorph('paymentable', [\App\Models\Customer::class], fn ($query) => $query->where('name', 'like', '%'.$this->payPartyChequeSearch.'%'));
             })
             ->with('paymentable.customer')
             ->limit(5)
@@ -703,7 +704,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                             <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
                                         </div>
                                         <p class="mt-0.5 text-xs text-zinc-500">
-                                            {{ $partySale?->customer?->name ?? __('Unknown Customer') }} · {{ $partySale?->invoice_no }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                            {{ $partySale instanceof \App\Models\Sale ? ($partySale->customer?->name ?? __('Unknown Customer')) : ($partySale->name ?? __('Unknown Customer')) }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
                                         </p>
                                     </button>
                                 @endforeach
@@ -719,7 +720,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                 <span class="font-black">Rs {{ number_format($this->selectedPayPartyCheque->amount, 2) }}</span>
                             </div>
                             <p class="mt-1 font-semibold">
-                                {{ $selectedPartySale?->customer?->name ?? __('Unknown Customer') }} · {{ __('Due') }} {{ $this->selectedPayPartyCheque->cheque_date?->format('Y-m-d') }}
+                                {{ $selectedPartySale instanceof \App\Models\Sale ? ($selectedPartySale->customer?->name ?? __('Unknown Customer')) : ($selectedPartySale->name ?? __('Unknown Customer')) }} · {{ __('Due') }} {{ $this->selectedPayPartyCheque->cheque_date?->format('Y-m-d') }}
                             </p>
                         </div>
                     @endif

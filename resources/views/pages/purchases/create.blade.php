@@ -928,7 +928,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     {
         return Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
             ->whereDoesntHave('issuedPayments', fn ($query) => $query
                 ->where('cheque_status', 'pending')
                 ->when($this->editingPurchaseId, fn ($query) => $query
@@ -938,7 +938,9 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                     })))
             ->where(function ($query) use ($search): void {
                 $query->where('cheque_no', 'like', '%' . $search . '%')
-                    ->orWhere('reference', 'like', '%' . $search . '%');
+                    ->orWhere('reference', 'like', '%' . $search . '%')
+                    ->orWhereHasMorph('paymentable', [Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%' . $search . '%'))
+                    ->orWhereHasMorph('paymentable', [Customer::class], fn ($query) => $query->where('name', 'like', '%' . $search . '%'));
             })
             ->with('paymentable.customer');
     }
@@ -1247,7 +1249,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                                                                     <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
                                                                 </div>
                                                                 <p class="mt-0.5 text-xs text-zinc-500">
-                                                                    {{ $partySale?->customer?->name ?? __('Unknown Customer') }} · {{ $partySale?->invoice_no }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                                                    {{ $partySale instanceof \App\Models\Sale ? ($partySale->customer?->name ?? __('Unknown Customer')) : ($partySale->name ?? __('Unknown Customer')) }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
                                                                 </p>
                                                             </button>
                                                         @endforeach

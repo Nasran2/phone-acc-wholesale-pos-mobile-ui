@@ -135,6 +135,12 @@ class ChequePaymentService
                 if ($sourceSale instanceof Sale) {
                     $this->syncSaleStatus($sourceSale);
                 }
+
+                if ($sourceSale instanceof Customer) {
+                    $sourceSale->update([
+                        'due_balance' => round(max(0, (float) $sourceSale->due_balance + (float) $payment->sourcePayment->amount), 2),
+                    ]);
+                }
             }
 
             $supplier = $payment->paymentable;
@@ -213,6 +219,11 @@ class ChequePaymentService
                     $sourceSale = $payment->sourcePayment->paymentable;
                     if ($sourceSale instanceof Sale) {
                         $this->syncSaleStatus($sourceSale);
+                    }
+                    if ($sourceSale instanceof Customer) {
+                        $sourceSale->update([
+                            'due_balance' => round(max(0, (float) $sourceSale->due_balance - (float) $payment->sourcePayment->amount), 2),
+                        ]);
                     }
                 }
             }
