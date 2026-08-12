@@ -1058,13 +1058,10 @@ new #[Title('POS Terminal')] class extends Component
                         ->orWhereHas('sale', fn($query) => $query->where('invoice_no', 'like', '%' . $search . '%'));
                 });
             })
-            ->orderByDesc(
-                Sale::query()
-                    ->select('date')
-                    ->whereColumn('sales.id', 'sale_items.sale_id')
-                    ->limit(1)
-            )
+            ->join('sales', 'sales.id', '=', 'sale_items.sale_id')
+            ->orderByDesc('sales.date')
             ->orderByDesc('sale_items.id')
+            ->select('sale_items.*')
             ->limit(8)
             ->get()
             ->filter(fn(SaleItem $saleItem): bool => $this->maxReturnableQuantityForSaleItem($saleItem) > 0)
@@ -1095,7 +1092,7 @@ new #[Title('POS Terminal')] class extends Component
     #[Computed]
     public function cartTotal()
     {
-        return round(max(0.00, ($this->cartSubtotal + (float) $this->tax) - $this->cartDiscountAmount), 2);
+        return round(max(0.00, ($this->cartSubtotal + (float) $this->tax) - $this->cartDiscountAmount - $this->returnCreditsTotal), 2);
     }
 
     #[Computed]
