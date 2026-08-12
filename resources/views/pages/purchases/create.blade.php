@@ -588,7 +588,9 @@ new #[Title('Record Wholesale Purchase')] class extends Component
         }
 
         return $this->availablePartyChequeQuery($search)
-            ->with('paymentable.customer')
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([Sale::class => ['customer']]);
+            }])
             ->limit(5)
             ->get();
     }
@@ -614,8 +616,10 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
         return Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
-            ->with('paymentable.customer')
+            ->whereIn('paymentable_type', [Sale::class, Customer::class])
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([Sale::class => ['customer']]);
+            }])
             ->find($this->party_cheque_payment_id);
     }
 
@@ -788,7 +792,9 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                         $query->where('paymentable_type', '!=', Purchase::class)
                             ->orWhere('paymentable_id', '!=', $this->editingPurchaseId);
                     })))
-            ->with('paymentable.customer')
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([Sale::class => ['customer']]);
+            }])
             ->findOrFail($paymentId);
     }
 
@@ -942,12 +948,19 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                     ->orWhereHasMorph('paymentable', [Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%' . $search . '%'))
                     ->orWhereHasMorph('paymentable', [Customer::class], fn ($query) => $query->where('name', 'like', '%' . $search . '%'));
             })
-            ->with('paymentable.customer');
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([Sale::class => ['customer']]);
+            }]);
     }
 
     private function loadPurchaseForEditing(Purchase $purchase): void
     {
-        $purchase->load(['items.product', 'payments.sourcePayment.paymentable.customer']);
+        $purchase->load([
+            'items.product',
+            'payments.sourcePayment.paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([Sale::class => ['customer']]);
+            }
+        ]);
 
         $this->editingPurchaseId = $purchase->id;
         $this->invoice_no = $purchase->invoice_no;

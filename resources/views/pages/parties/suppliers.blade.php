@@ -334,7 +334,9 @@ new #[Title('Manage Suppliers')] class extends Component
                     ->orWhereHasMorph('paymentable', [\App\Models\Sale::class], fn ($query) => $query->where('invoice_no', 'like', '%'.$this->payPartyChequeSearch.'%'))
                     ->orWhereHasMorph('paymentable', [\App\Models\Customer::class], fn ($query) => $query->where('name', 'like', '%'.$this->payPartyChequeSearch.'%'));
             })
-            ->with('paymentable.customer')
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+            }])
             ->limit(5)
             ->get();
     }
@@ -361,8 +363,10 @@ new #[Title('Manage Suppliers')] class extends Component
 
         return Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', \App\Models\Sale::class)
-            ->with('paymentable.customer')
+            ->whereIn('paymentable_type', [\App\Models\Sale::class, \App\Models\Customer::class])
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+            }])
             ->find($this->payPartyChequePaymentId);
     }
 
@@ -370,8 +374,10 @@ new #[Title('Manage Suppliers')] class extends Component
     {
         $payment = Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', \App\Models\Sale::class)
-            ->with('paymentable.customer')
+            ->whereIn('paymentable_type', [\App\Models\Sale::class, \App\Models\Customer::class])
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+            }])
             ->findOrFail($paymentId);
 
         $this->payPartyChequePaymentId = $payment->id;

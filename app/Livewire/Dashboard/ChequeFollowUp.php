@@ -52,7 +52,9 @@ class ChequeFollowUp extends Component
                 $query->where('cheque_no', 'like', '%'.$this->partyChequeSearch.'%')
                     ->orWhere('reference', 'like', '%'.$this->partyChequeSearch.'%');
             })
-            ->with('paymentable.customer')
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+            }])
             ->limit(5)
             ->get();
     }
@@ -61,8 +63,10 @@ class ChequeFollowUp extends Component
     {
         $payment = Payment::query()
             ->pendingCheque()
-            ->where('paymentable_type', Sale::class)
-            ->with('paymentable.customer')
+            ->whereIn('paymentable_type', [\App\Models\Sale::class, \App\Models\Customer::class])
+            ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+            }])
             ->findOrFail($paymentId);
 
         $this->replacementPartyChequePaymentId = $payment->id;
@@ -129,8 +133,10 @@ class ChequeFollowUp extends Component
             if ($this->settlementMethod === 'party_cheque') {
                 $replacementCheque = Payment::query()
                     ->pendingCheque()
-                    ->where('paymentable_type', Sale::class)
-                    ->with('paymentable.customer')
+                    ->whereIn('paymentable_type', [\App\Models\Sale::class, \App\Models\Customer::class])
+                    ->with(['paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {
+                        $morphTo->morphWith([\App\Models\Sale::class => ['customer']]);
+                    }])
                     ->findOrFail($this->replacementPartyChequePaymentId);
 
                 $purchase->payments()->create([
