@@ -14,16 +14,15 @@ new #[Title('Cheque Report')] class extends Component
 
     public string $search = '';
     public string $status = 'all';
+    public ?int $supplierId = null;
+    public ?string $startDate = null;
+    public ?string $endDate = null;
 
-    public function updatingSearch()
-    {
-        $this->resetPage();
-    }
-    
-    public function updatingStatus()
-    {
-        $this->resetPage();
-    }
+    public function updatingSearch() { $this->resetPage(); }
+    public function updatingStatus() { $this->resetPage(); }
+    public function updatingSupplierId() { $this->resetPage(); }
+    public function updatingStartDate() { $this->resetPage(); }
+    public function updatingEndDate() { $this->resetPage(); }
 
     public ?int $editPaymentId = null;
     public string $editAmount = '';
@@ -115,7 +114,83 @@ new #[Title('Cheque Report')] class extends Component
             });
         }
 
+        if ($this->supplierId) {
+            $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
+                if ($type === \App\Models\Purchase::class) {
+                    $q->where('supplier_id', $this->supplierId);
+                } else {
+                    $q->where('id', $this->supplierId);
+                }
+            });
+        }
+        
+        if ($this->startDate) {
+            $query->whereDate('cheque_date', '>=', $this->startDate);
+        }
+        
+        if ($this->endDate) {
+            $query->whereDate('cheque_date', '<=', $this->endDate);
+        }
+
         return $query->orderBy('cheque_date', 'desc')->orderBy('id', 'desc')->paginate(15);
+    }
+    
+    #[Computed]
+    public function suppliers()
+    {
+        return \App\Models\Supplier::orderBy('name')->get();
+    }
+
+    public function downloadPdf()
+    {
+        $query = Payment::query()
+            ->where('payment_method', 'cheque')
+            ->whereDoesntHave('issuedPayments')
+            ->with(['paymentable', 'sourcePayment.paymentable', 'partyCustomer']);
+
+        if ($this->status !== 'all') {
+            $query->where('cheque_status', $this->status);
+        }
+
+        if ($this->supplierId) {
+            $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
+                if ($type === \App\Models\Purchase::class) {
+                    $q->where('supplier_id', $this->supplierId);
+                } else {
+                    $q->where('id', $this->supplierId);
+                }
+            });
+        }
+        
+        if ($this->startDate) {
+            $query->whereDate('cheque_date', '>=', $this->startDate);
+        }
+        
+        if ($this->endDate) {
+            $query->whereDate('cheque_date', '<=', $this->endDate);
+        }
+
+        if ($this->search) {
+            $query->where(function ($q) {
+                $q->where('cheque_no', 'like', '%' . $this->search . '%')
+                  ->orWhere('cheque_bank', 'like', '%' . $this->search . '%')
+                  ->orWhere('reference', 'like', '%' . $this->search . '%');
+            });
+        }
+
+        $cheques = $query->orderBy('cheque_date', 'desc')->orderBy('id', 'desc')->get();
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('pdf.cheque-report', [
+            'cheques' => $cheques,
+            'status' => $this->status,
+            'startDate' => $this->startDate,
+            'endDate' => $this->endDate,
+            'supplier' => $this->supplierId ? \App\Models\Supplier::find($this->supplierId) : null,
+        ])->setPaper('a4', 'landscape');
+
+        return response()->streamDownload(function () use ($pdf) {
+            echo $pdf->stream();
+        }, 'cheque-report.pdf');
     }
     
     public function getSupplierName($payment)
@@ -137,7 +212,7 @@ new #[Title('Cheque Report')] class extends Component
     </div>
 
     <!-- Filters -->
-    <div class="app-card p-4 grid gap-4 sm:grid-cols-3">
+    <div class="app-card p-4 grid gap-4 sm:grid-cols-2 md:grid-cols-5">
         <flux:input wire:model.live.debounce.300ms="search" placeholder="Search cheque no or bank..." />
 
         <flux:select wire:model.live="status" placeholder="All Statuses">
@@ -146,6 +221,22 @@ new #[Title('Cheque Report')] class extends Component
             <option value="passed">Passed</option>
             <option value="returned">Returned</option>
         </flux:select>
+        
+        <flux:select wire:model.live="supplierId" placeholder="All Suppliers">
+            <option value="">All Suppliers</option>
+            @foreach($this->suppliers as $sup)
+                <option value="{{ $sup->id }}">{{ $sup->name }}</option>
+            @endforeach
+        </flux:select>
+        
+        <flux:input wire:model.live="startDate" type="date" placeholder="Start Date" />
+        <flux:input wire:model.live="endDate" type="date" placeholder="End Date" />
+    </div>
+
+    <div class="flex justify-end">
+        <flux:button wire:click="downloadPdf" variant="primary" icon="document-arrow-down">
+            Download PDF
+        </flux:button>
     </div>
 
     <!-- Table -->
