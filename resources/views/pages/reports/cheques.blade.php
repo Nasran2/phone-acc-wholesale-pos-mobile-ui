@@ -171,7 +171,7 @@ new #[Title('Cheque Report')] class extends Component
                                 <span class="text-xs text-zinc-400 block">{{ $pm->cheque_date ? $pm->cheque_date->format('Y-m-d') : 'No Date' }}</span>
                             </td>
                             <td class="px-4 py-3 font-semibold text-zinc-900">Rs {{ number_format($pm->amount, 2) }}</td>
-                            <td class="px-4 py-3">{{ $pm->resolveCustomerName() !== __('Unknown Customer') ? $pm->resolveCustomerName() : '-' }}</td>
+                            <td class="px-4 py-3">{{ method_exists($pm, 'resolveCustomerName') && $pm->resolveCustomerName() !== __('Unknown Customer') ? $pm->resolveCustomerName() : '-' }}</td>
                             <td class="px-4 py-3">{{ $this->getSupplierName($pm) }}</td>
                             <td class="px-4 py-3">
                                 @if ($pm->cheque_status === 'passed')
