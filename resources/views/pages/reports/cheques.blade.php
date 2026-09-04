@@ -51,6 +51,7 @@ new #[Title('Cheque Report')] class extends Component
     {
         $query = Payment::query()
             ->where('payment_method', 'cheque')
+            ->whereDoesntHave('issuedPayments')
             ->with(['paymentable', 'sourcePayment.paymentable', 'partyCustomer']);
 
         if ($this->status !== 'all') {
@@ -72,6 +73,9 @@ new #[Title('Cheque Report')] class extends Component
     {
         if ($payment->partyCustomer) {
             return $payment->partyCustomer->name;
+        }
+        if ($payment->sourcePayment) {
+            return $this->getCustomerName($payment->sourcePayment);
         }
         if ($payment->paymentable instanceof \App\Models\Sale) {
             return $payment->paymentable->customer?->name;
