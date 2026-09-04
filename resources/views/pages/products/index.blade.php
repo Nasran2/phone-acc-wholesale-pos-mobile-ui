@@ -208,6 +208,9 @@ new #[Title('Products')] class extends Component
                 </div>
             @endforelse
         </div>
+        <div class="mt-4 pb-20 md:pb-0">
+            {{ $this->products->links() }}
+        </div>
     </section>
 
     <section class="hidden md:block">

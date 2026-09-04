@@ -49,4 +49,21 @@ class Payment extends Model
     {
         return $this->belongsTo(Customer::class, 'party_customer_id');
     }
+
+    public function resolveCustomerName(): string
+    {
+        if ($this->partyCustomer) {
+            return $this->partyCustomer->name;
+        }
+        if ($this->sourcePayment) {
+            return $this->sourcePayment->resolveCustomerName();
+        }
+        if ($this->paymentable instanceof Sale) {
+            return $this->paymentable->customer?->name ?? __('Unknown Customer');
+        }
+        if ($this->paymentable instanceof Customer) {
+            return $this->paymentable->name ?? __('Unknown Customer');
+        }
+        return __('Unknown Customer');
+    }
 }

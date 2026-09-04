@@ -56,6 +56,7 @@ new #[Title('POS Returns')] class extends Component
                     'refund_price' => (float) $item->selling_price,
                     'max' => $maxReturnable,
                     'subtotal' => 0.00,
+                    'condition' => 'faulty', // restock or faulty
                     'stock' => (int) ($item->product?->stock_quantity ?? 0),
                 ];
             }
@@ -203,6 +204,13 @@ new #[Title('POS Returns')] class extends Component
                                 <p class="text-xs text-zinc-500">{{ __('Returnable') }}</p>
                                 <p class="text-sm font-black text-zinc-950 dark:text-white">{{ $item['max'] }}</p>
                             </div>
+                        </div>
+
+                        <div class="mt-3">
+                            <flux:select wire:model.live="returnItems.{{ $productId }}.condition" size="sm">
+                                <option value="faulty">{{ __('Faulty Product') }}</option>
+                                <option value="restock">{{ __('Restock') }}</option>
+                            </flux:select>
                         </div>
 
                         <div class="mt-4 flex items-center justify-between gap-3">

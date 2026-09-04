@@ -72,7 +72,7 @@ class SaleReturnService
                     'subtotal' => $item['subtotal'],
                 ]);
 
-                $this->moveReturnedStock($item, $returnType);
+                $this->moveReturnedStock($item, $returnType, $return->id);
             }
 
             if ($adjustedAmount > 0) {
@@ -138,6 +138,7 @@ class SaleReturnService
                 'refund_price' => $refundPrice,
                 'subtotal' => round($quantity * $refundPrice, 2),
                 'unit_cost' => round((float) $saleItem->cost_price, 2),
+                'condition' => $item['condition'] ?? 'faulty',
             ];
         }
 
@@ -177,9 +178,9 @@ class SaleReturnService
     }
 
     /**
-     * @param  array{product_id: int, quantity: int, unit_cost: float}  $item
+     * @param  array{product_id: int, quantity: int, unit_cost: float, condition: string}  $item
      */
-    private function moveReturnedStock(array $item, string $returnType): void
+    private function moveReturnedStock(array $item, string $returnType, int $saleReturnId): void
     {
         $product = Product::query()->findOrFail($item['product_id']);
 
@@ -192,10 +193,29 @@ class SaleReturnService
 
             $product->decrement('stock_quantity', $item['quantity']);
 
+            if ($item['condition'] === 'faulty') {
+                \App\Models\FaultyItem::create([
+                    'product_id' => $item['product_id'],
+                    'quantity' => $item['quantity'],
+                    'source_sale_return_id' => $saleReturnId,
+                    'status' => 'pending',
+                ]);
+            } else {
+                $product->increment('stock_quantity', $item['quantity']);
+            }
             return;
         }
 
-        $product->increment('stock_quantity', $item['quantity']);
+        if ($item['condition'] === 'faulty') {
+            \App\Models\FaultyItem::create([
+                'product_id' => $item['product_id'],
+                'quantity' => $item['quantity'],
+                'source_sale_return_id' => $saleReturnId,
+                'status' => 'pending',
+            ]);
+        } else {
+            $product->increment('stock_quantity', $item['quantity']);
+        }
     }
 
     private function reduceDue(Sale $sale, ?Customer $customer, float $adjustedAmount): void
@@ -261,15 +281,38 @@ class SaleReturnService
             foreach ($return->items as $item) {
                 $product = $item->product;
                 if ($product && $product->manage_stock) {
+                    // Check if it was returned as faulty
+                    $faultyItem = \App\Models\FaultyItem::query()
+                        ->where('source_sale_return_id', $return->id)
+                        ->where('product_id', $item->product_id)
+                        ->first();
+                        
+                    $wasFaulty = $faultyItem !== null;
+
                     if ($returnType === 'exchange') {
-                        // Exchange originally decremented stock, so we increment it back
+                        // Exchange originally decremented stock for the new item given to customer.
+                        // We must increment it back.
                         $product->increment('stock_quantity', $item->quantity);
+                        
+                        // What about the item they gave us? 
+                        // If it was restock, we incremented stock_quantity. So we decrement it.
+                        if (!$wasFaulty) {
+                            $product->decrement('stock_quantity', $item->quantity);
+                        }
                     } else {
-                        // Cash refund or adjust due originally incremented stock, so we decrement it back
-                        $product->decrement('stock_quantity', $item->quantity);
+                        // Cash refund or adjust due originally incremented stock (if restock).
+                        // If restock, we decrement it back.
+                        if (!$wasFaulty) {
+                            $product->decrement('stock_quantity', $item->quantity);
+                        }
                     }
                 }
             }
+
+            // Delete associated faulty items
+            \App\Models\FaultyItem::query()
+                ->where('source_sale_return_id', $return->id)
+                ->delete();
 
             // Revert due balances if it was an adjust_due return
             if ($returnType === 'adjust_due' && $return->adjusted_amount > 0 && $sale) {

@@ -370,7 +370,7 @@
                                         <flux:icon.plus-circle class="size-4 text-zinc-400" />
                                         <span>Add Purchase</span>
                                     </a>
-                                    <a href="{{ route('purchases.index') }}" wire:navigate class="flex items-center gap-2.5 py-1.5 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400">
+                                    <a href="{{ route('purchases.returns') }}" wire:navigate class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400 {{ request()->routeIs('purchases.returns') ? 'bg-zinc-100 text-zinc-900 dark:bg-white/10 dark:text-white' : '' }}">
                                         <flux:icon.arrow-path class="size-4 text-zinc-400" />
                                         <span>Purchase Returns</span>
                                     </a>
@@ -896,7 +896,7 @@
                                 <div x-show="expandedMenu === 'purchases'" x-transition class="ml-12 space-y-1 border-l border-zinc-100 pl-3 dark:border-zinc-800">
                                     <a href="{{ route('purchases.index') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.shopping-bag class="size-4 text-zinc-400" /><span>{{ __('Purchases') }}</span></a>
                                     <a href="{{ route('purchases.create') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.plus-circle class="size-4 text-zinc-400" /><span>{{ __('Add Purchase') }}</span></a>
-                                    <a href="{{ route('purchases.index') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.arrow-path class="size-4 text-zinc-400" /><span>{{ __('Purchase Returns') }}</span></a>
+                                    <a href="{{ route('purchases.returns') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400 {{ request()->routeIs('purchases.returns') ? 'bg-zinc-100 text-zinc-900 dark:bg-white/10 dark:text-white' : '' }}"><flux:icon.arrow-path class="size-4 text-zinc-400" /><span>{{ __('Purchase Returns') }}</span></a>
                                     <a href="{{ route('reports.index') }}" wire:navigate @click="mobileMenuOpen = false" class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm font-medium text-zinc-500 hover:text-violet-600 dark:text-zinc-400 dark:hover:text-violet-400"><flux:icon.chart-bar class="size-4 text-zinc-400" /><span>{{ __('Purchase Report') }}</span></a>
                                 </div>
                             </div>

@@ -66,4 +66,9 @@ class Product extends Model
     {
         return $this->belongsTo(Unit::class);
     }
+
+    public function faultyItems(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(FaultyItem::class);
+    }
 }

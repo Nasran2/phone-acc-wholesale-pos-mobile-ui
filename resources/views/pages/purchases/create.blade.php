@@ -907,10 +907,8 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     {
         $paymentable = $payment->paymentable;
 
-        if ($paymentable instanceof Sale) {
-            $paymentable->loadMissing('customer');
-
-            return __('customer :name', ['name' => $paymentable->customer?->name ?? __('Unknown Customer')]);
+        if ($paymentable instanceof \App\Models\Customer || $paymentable instanceof \App\Models\Sale) {
+            return __('customer :name', ['name' => $payment->resolveCustomerName()]);
         }
 
         if ($paymentable instanceof Customer) {
@@ -1262,7 +1260,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
                                                                     <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
                                                                 </div>
                                                                 <p class="mt-0.5 text-xs text-zinc-500">
-                                                                    {{ $partySale instanceof \App\Models\Sale ? ($partySale->customer?->name ?? __('Unknown Customer')) : ($partySale->name ?? __('Unknown Customer')) }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                                                    {{ $partyCheque->resolveCustomerName() }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
                                                                 </p>
                                                             </button>
                                                         @endforeach

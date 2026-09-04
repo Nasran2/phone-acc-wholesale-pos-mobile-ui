@@ -710,7 +710,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                             <span class="text-xs font-black text-violet-600">Rs {{ number_format($partyCheque->amount, 2) }}</span>
                                         </div>
                                         <p class="mt-0.5 text-xs text-zinc-500">
-                                            {{ $partySale instanceof \App\Models\Sale ? ($partySale->customer?->name ?? __('Unknown Customer')) : ($partySale->name ?? __('Unknown Customer')) }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                            {{ $partyCheque->resolveCustomerName() }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
                                         </p>
                                     </button>
                                 @endforeach
@@ -726,7 +726,7 @@ new #[Title('Manage Suppliers')] class extends Component
                                 <span class="font-black">Rs {{ number_format($this->selectedPayPartyCheque->amount, 2) }}</span>
                             </div>
                             <p class="mt-1 font-semibold">
-                                {{ $selectedPartySale instanceof \App\Models\Sale ? ($selectedPartySale->customer?->name ?? __('Unknown Customer')) : ($selectedPartySale->name ?? __('Unknown Customer')) }} · {{ __('Due') }} {{ $this->selectedPayPartyCheque->cheque_date?->format('Y-m-d') }}
+                                {{ $this->selectedPayPartyCheque->resolveCustomerName() }} · {{ __('Due') }} {{ $this->selectedPayPartyCheque->cheque_date?->format('Y-m-d') }}
                             </p>
                         </div>
                     @endif

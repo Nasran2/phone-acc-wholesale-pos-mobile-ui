@@ -118,23 +118,6 @@ new #[Title('Cheque Report')] class extends Component
         return $query->orderBy('cheque_date', 'desc')->orderBy('id', 'desc')->paginate(15);
     }
     
-    public function getCustomerName($payment)
-    {
-        if ($payment->partyCustomer) {
-            return $payment->partyCustomer->name;
-        }
-        if ($payment->sourcePayment) {
-            return $this->getCustomerName($payment->sourcePayment);
-        }
-        if ($payment->paymentable instanceof \App\Models\Sale) {
-            return $payment->paymentable->customer?->name;
-        }
-        if ($payment->paymentable instanceof \App\Models\Customer) {
-            return $payment->paymentable->name;
-        }
-        return '-';
-    }
-
     public function getSupplierName($payment)
     {
         if ($payment->paymentable instanceof \App\Models\Purchase) {
@@ -188,7 +171,7 @@ new #[Title('Cheque Report')] class extends Component
                                 <span class="text-xs text-zinc-400 block">{{ $pm->cheque_date ? $pm->cheque_date->format('Y-m-d') : 'No Date' }}</span>
                             </td>
                             <td class="px-4 py-3 font-semibold text-zinc-900">Rs {{ number_format($pm->amount, 2) }}</td>
-                            <td class="px-4 py-3">{{ $this->getCustomerName($pm) }}</td>
+                            <td class="px-4 py-3">{{ $pm->resolveCustomerName() !== __('Unknown Customer') ? $pm->resolveCustomerName() : '-' }}</td>
                             <td class="px-4 py-3">{{ $this->getSupplierName($pm) }}</td>
                             <td class="px-4 py-3">
                                 @if ($pm->cheque_status === 'passed')

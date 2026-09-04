@@ -30,7 +30,7 @@
                                     @elseif ($customer)
                                         {{ $customer->name ?? __('Unknown Customer') }}
                                     @else
-                                        {{ $sale?->customer?->name ?? __('Unknown Customer') }}
+                                        {{ $cheque->resolveCustomerName() }}
                                     @endif
                                 </p>
                                 <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
@@ -55,7 +55,7 @@
                             </p>
                             @if (($purchase || $supplier) && $cheque->cheque_type === 'party')
                                 <p class="mt-0.5 text-[10px] font-semibold text-zinc-500 dark:text-zinc-400">
-                                    {{ __('Customer:') }} <span class="font-bold">{{ $sourceSale?->customer?->name ?? $cheque->partyCustomer?->name ?? __('Unknown Customer') }}</span>
+                                    {{ __('Customer:') }} <span class="font-bold">{{ $cheque->resolveCustomerName() }}</span>
                                 </p>
                             @endif
                             @if ($cheque->cheque_bank || $cheque->cheque_no)
@@ -115,7 +115,7 @@
                                         <span class="text-xs font-black text-violet-600 dark:text-violet-300">Rs {{ number_format($partyCheque->amount, 2) }}</span>
                                     </div>
                                     <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                                        {{ $partySale?->customer?->name ?? __('Unknown Customer') }} · {{ $partySale?->invoice_no }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
+                                        {{ $partyCheque->resolveCustomerName() }} · {{ $partySale instanceof \App\Models\Sale ? $partySale->invoice_no : __('Due Payoff') }} · {{ $partyCheque->cheque_date?->format('Y-m-d') }}
                                     </p>
                                 </button>
                             @endforeach
