@@ -25,6 +25,55 @@ new #[Title('Cheque Report')] class extends Component
         $this->resetPage();
     }
 
+    public ?int $editPaymentId = null;
+    public string $editAmount = '';
+    public string $editChequeNo = '';
+    public string $editChequeBank = '';
+    public string $editChequeDate = '';
+
+    public function editCheque(int $paymentId)
+    {
+        $this->editPaymentId = $paymentId;
+        $payment = Payment::query()->findOrFail($paymentId);
+        
+        $this->editAmount = $payment->amount;
+        $this->editChequeNo = $payment->cheque_no ?: ($payment->reference ?: '');
+        $this->editChequeBank = $payment->cheque_bank ?: '';
+        $this->editChequeDate = $payment->cheque_date ? $payment->cheque_date->format('Y-m-d') : '';
+        
+        $this->resetValidation();
+        Flux::modal('edit-cheque')->show();
+    }
+
+    public function updateCheque()
+    {
+        $this->validate([
+            'editAmount' => 'required|numeric|min:0',
+            'editChequeNo' => 'required|string|max:255',
+            'editChequeBank' => 'required|string|max:255',
+            'editChequeDate' => 'required|date',
+        ]);
+
+        $payment = Payment::query()->findOrFail($this->editPaymentId);
+        
+        $data = [
+            'amount' => $this->editAmount,
+            'cheque_no' => $this->editChequeNo,
+            'reference' => $this->editChequeNo,
+            'cheque_bank' => $this->editChequeBank,
+            'cheque_date' => $this->editChequeDate,
+        ];
+
+        $payment->update($data);
+
+        if ($payment->sourcePayment) {
+            $payment->sourcePayment->update($data);
+        }
+
+        Flux::modal('edit-cheque')->close();
+        Flux::toast(variant: 'success', text: __('Cheque details updated successfully.'));
+    }
+
     public function markAsPassed(int $paymentId, ChequePaymentService $service)
     {
         $payment = Payment::query()->findOrFail($paymentId);
@@ -154,6 +203,7 @@ new #[Title('Cheque Report')] class extends Component
                                 <flux:dropdown>
                                     <flux:button size="sm" variant="ghost" icon="ellipsis-vertical" />
                                     <flux:navmenu>
+                                        <flux:navmenu.item wire:click="editCheque({{ $pm->id }})" icon="pencil" class="text-zinc-600">Edit Details</flux:navmenu.item>
                                         @if ($pm->cheque_status !== 'passed')
                                             <flux:navmenu.item wire:click="markAsPassed({{ $pm->id }})" icon="check-circle" class="text-emerald-600">Mark Passed</flux:navmenu.item>
                                         @endif
@@ -179,4 +229,28 @@ new #[Title('Cheque Report')] class extends Component
             {{ $this->cheques->links() }}
         </div>
     </div>
+
+    <!-- Edit Cheque Modal -->
+    <flux:modal name="edit-cheque" class="md:w-96">
+        <div class="space-y-6">
+            <div>
+                <h2 class="text-lg font-bold text-zinc-900">Edit Cheque Details</h2>
+                <p class="text-sm text-zinc-500">Update the cheque information below.</p>
+            </div>
+            
+            <div class="space-y-4">
+                <flux:input wire:model="editAmount" label="Amount" type="number" step="0.01" />
+                <flux:input wire:model="editChequeNo" label="Cheque No / Reference" />
+                <flux:input wire:model="editChequeBank" label="Bank Name" />
+                <flux:input wire:model="editChequeDate" label="Cheque Date" type="date" />
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <flux:modal.close>
+                    <flux:button variant="ghost">Cancel</flux:button>
+                </flux:modal.close>
+                <flux:button wire:click="updateCheque" variant="primary">Save Changes</flux:button>
+            </div>
+        </div>
+    </flux:modal>
 </div>
