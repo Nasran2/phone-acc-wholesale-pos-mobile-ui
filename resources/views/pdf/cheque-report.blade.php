@@ -80,7 +80,7 @@
     <div class="filters">
         <strong>Filters Applied:</strong><br>
         Status: {{ ucfirst($status) }} <br>
-        @if($supplier) Supplier: {{ $supplier->name }} <br> @endif
+        @if($isNonSupplier) Supplier: Non Supplier (-) <br> @elseif($supplier) Supplier: {{ $supplier->name }} <br> @endif
         @if($startDate) From: {{ $startDate }} <br> @endif
         @if($endDate) To: {{ $endDate }} <br> @endif
     </div>

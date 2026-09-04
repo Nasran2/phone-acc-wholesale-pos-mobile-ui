@@ -14,7 +14,7 @@ new #[Title('Cheque Report')] class extends Component
 
     public string $search = '';
     public string $status = 'all';
-    public ?int $supplierId = null;
+    public ?string $supplierId = null;
     public ?string $startDate = null;
     public ?string $endDate = null;
 
@@ -115,13 +115,20 @@ new #[Title('Cheque Report')] class extends Component
         }
 
         if ($this->supplierId) {
-            $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
-                if ($type === \App\Models\Purchase::class) {
-                    $q->where('supplier_id', $this->supplierId);
-                } else {
-                    $q->where('id', $this->supplierId);
-                }
-            });
+            if ($this->supplierId === 'none') {
+                $query->whereNotIn('paymentable_type', [
+                    (new \App\Models\Purchase)->getMorphClass(),
+                    (new \App\Models\Supplier)->getMorphClass()
+                ]);
+            } else {
+                $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
+                    if ($type === \App\Models\Purchase::class) {
+                        $q->where('supplier_id', $this->supplierId);
+                    } else {
+                        $q->where('id', $this->supplierId);
+                    }
+                });
+            }
         }
         
         if ($this->startDate) {
@@ -153,13 +160,20 @@ new #[Title('Cheque Report')] class extends Component
         }
 
         if ($this->supplierId) {
-            $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
-                if ($type === \App\Models\Purchase::class) {
-                    $q->where('supplier_id', $this->supplierId);
-                } else {
-                    $q->where('id', $this->supplierId);
-                }
-            });
+            if ($this->supplierId === 'none') {
+                $query->whereNotIn('paymentable_type', [
+                    (new \App\Models\Purchase)->getMorphClass(),
+                    (new \App\Models\Supplier)->getMorphClass()
+                ]);
+            } else {
+                $query->whereHasMorph('paymentable', [\App\Models\Purchase::class, \App\Models\Supplier::class], function ($q, $type) {
+                    if ($type === \App\Models\Purchase::class) {
+                        $q->where('supplier_id', $this->supplierId);
+                    } else {
+                        $q->where('id', $this->supplierId);
+                    }
+                });
+            }
         }
         
         if ($this->startDate) {
@@ -185,7 +199,8 @@ new #[Title('Cheque Report')] class extends Component
             'status' => $this->status,
             'startDate' => $this->startDate,
             'endDate' => $this->endDate,
-            'supplier' => $this->supplierId ? \App\Models\Supplier::find($this->supplierId) : null,
+            'supplier' => ($this->supplierId && $this->supplierId !== 'none') ? \App\Models\Supplier::find($this->supplierId) : null,
+            'isNonSupplier' => $this->supplierId === 'none',
         ])->setPaper('a4', 'landscape');
 
         return response()->streamDownload(function () use ($pdf) {
@@ -224,6 +239,7 @@ new #[Title('Cheque Report')] class extends Component
         
         <flux:select wire:model.live="supplierId" placeholder="All Suppliers">
             <option value="">All Suppliers</option>
+            <option value="none">Non Supplier (-)</option>
             @foreach($this->suppliers as $sup)
                 <option value="{{ $sup->id }}">{{ $sup->name }}</option>
             @endforeach
