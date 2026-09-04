@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('supplier_id')->constrained()->cascadeOnDelete();
             $table->foreignId('purchase_id')->nullable()->constrained()->nullOnDelete();
-            $table->string('invoice_no')->unique();
+            $table->string('invoice_no', 100)->unique();
             $table->date('date');
             $table->string('return_type'); // exchange, adjust_due, cash_refund
             $table->decimal('refund_amount', 12, 2)->default(0);
