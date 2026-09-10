@@ -751,7 +751,7 @@ new #[Title('POS Terminal')] class extends Component
                     return;
                 }
 
-                $this->syncReturnCreditSubtotal((string) $key);
+                $this->syncReturnCreditSubtotal((string) $key, false);
             }
         }
 
@@ -1199,7 +1199,7 @@ new #[Title('POS Terminal')] class extends Component
         return round((float) collect($paymentRows)->where('method', 'cheque')->sum('amount'), 2);
     }
 
-    private function syncReturnCreditSubtotal(string $key): void
+    private function syncReturnCreditSubtotal(string $key, bool $syncPayment = true): void
     {
         if (! isset($this->returnCredits[$key])) {
             return;
@@ -1209,8 +1209,11 @@ new #[Title('POS Terminal')] class extends Component
         $returnPrice = max(0, (float) $this->returnCredits[$key]['return_price']);
 
         $this->returnCredits[$key]['subtotal'] = round($quantity * $returnPrice, 2);
-        $this->paid_amount = $this->cartTotal;
-        $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        
+        if ($syncPayment) {
+            $this->paid_amount = $this->cartTotal;
+            $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        }
     }
 
     private function returnCreditKey(int $saleId, int $productId): string
