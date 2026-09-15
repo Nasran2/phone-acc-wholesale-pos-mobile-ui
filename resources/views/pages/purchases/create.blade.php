@@ -1018,6 +1018,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
     }
 }; ?>
 
+<div>
 <div class="flex flex-col gap-6">
     <div class="flex flex-col gap-2">
         <h1 class="font-display text-2xl font-bold tracking-tight text-zinc-950">
@@ -1392,3 +1393,4 @@ new #[Title('Record Wholesale Purchase')] class extends Component
         </div>
     </div>
 </flux:modal>
+</div>
