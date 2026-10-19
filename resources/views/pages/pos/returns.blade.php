@@ -1,15 +1,28 @@
 <?php
 
 use App\Models\Sale;
-use App\Models\SaleReturnItem;
+use App\Models\SaleReturn;
 use App\Services\SaleReturnService;
 use Flux\Flux;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
+use Livewire\WithPagination;
 
 new #[Title('POS Returns')] class extends Component
 {
+    use WithPagination;
+
+    #[Locked]
+    public ?int $editingReturnId = null;
+
+    public string $historySearch = '';
+
+    public bool $returnDetailOpen = false;
+
+    public ?int $selectedReturnId = null;
+
     public string $search = '';
 
     public ?int $selectedSaleId = null;
@@ -25,44 +38,34 @@ new #[Title('POS Returns')] class extends Component
         if (! auth()->user()->hasPermission('process_return')) {
             abort(403, 'Unauthorized return access.');
         }
+        if (request()->integer('edit_return') > 0) {
+            $this->editReturn(request()->integer('edit_return'));
+        }
     }
 
     public function updatedSearch(): void
     {
-        $this->selectedSaleId = null;
-        $this->returnItems = [];
+        $this->cancelReturnEdit();
+        $this->resetPage(pageName: 'invoicesPage');
     }
 
     public function selectSale(int $saleId): void
     {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+        $this->editingReturnId = null;
         $sale = Sale::query()->with(['items.product', 'returns.items'])->findOrFail($saleId);
 
         $this->selectedSaleId = $sale->id;
         $this->returnItems = [];
 
-        foreach ($sale->items as $item) {
-            $alreadyReturned = (int) SaleReturnItem::query()
-                ->whereHas('returnLog', fn ($query) => $query->where('sale_id', $sale->id))
-                ->where('product_id', $item->product_id)
-                ->sum('quantity');
-
-            $maxReturnable = max(0, $item->quantity - $alreadyReturned);
-
-            if ($maxReturnable > 0 && $item->product_id) {
-                $this->returnItems[$item->product_id] = [
-                    'name' => $item->product?->name,
-                    'sku' => $item->product?->sku,
-                    'quantity' => 0,
-                    'refund_price' => (float) $item->selling_price,
-                    'max' => $maxReturnable,
-                    'subtotal' => 0.00,
-                    'condition' => 'faulty', // restock or faulty
-                    'stock' => (int) ($item->product?->stock_quantity ?? 0),
-                ];
-            }
-        }
+        $this->returnItems = app(SaleReturnService::class)->availableItems($sale);
 
         $this->returnType = (float) $sale->due_amount > 0 ? 'adjust_due' : 'exchange';
+        foreach ($this->returnItems as &$item) {
+            $item['condition'] = $this->returnType === 'exchange' ? 'faulty' : 'restock';
+        }
+        unset($item);
+        $this->resetValidation();
         $this->returnNotes = '';
 
         if (count($this->returnItems) === 0) {
@@ -79,11 +82,17 @@ new #[Title('POS Returns')] class extends Component
         $quantity = min((int) $this->returnItems[$productId]['max'], max(0, $quantity));
 
         $this->returnItems[$productId]['quantity'] = $quantity;
-        $this->returnItems[$productId]['subtotal'] = round($quantity * (float) $this->returnItems[$productId]['refund_price'], 2);
+        $item = &$this->returnItems[$productId];
+        $item['subtotal'] = isset($item['original_quantity']) && $quantity === $item['original_quantity']
+            ? $item['original_subtotal']
+            : app(SaleReturnService::class)->subtotalFor($item, $quantity);
+        unset($item);
     }
 
     public function submitReturn(SaleReturnService $returnService): void
     {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+
         $this->validate([
             'selectedSaleId' => 'required|exists:sales,id',
             'returnItems' => 'required|array',
@@ -93,11 +102,128 @@ new #[Title('POS Returns')] class extends Component
 
         $sale = Sale::query()->with(['customer', 'items.product'])->findOrFail($this->selectedSaleId);
 
-        $returnService->process($sale, $this->returnItems, $this->returnType, $this->returnNotes);
+        if ($this->editingReturnId) {
+            $return = SaleReturn::query()->where('sale_id', $sale->id)->findOrFail($this->editingReturnId);
+            $return = $returnService->update($return, $this->returnItems, $this->returnType, $this->returnNotes);
+        } else {
+            $return = $returnService->process($sale, $this->returnItems, $this->returnType, $this->returnNotes);
+        }
 
-        Flux::toast(variant: 'success', text: __('Return completed successfully.'));
+        Flux::toast(variant: 'success', text: $this->editingReturnId ? __('Return updated successfully.') : __('Return completed successfully.'));
+        $this->editingReturnId = null;
 
-        $this->selectSale($sale->id);
+        $this->selectedSaleId = null;
+        $this->returnItems = [];
+        $this->resetPage(pageName: 'returnsPage');
+        unset($this->completedReturns);
+        $this->viewReturnDetail($return->id);
+    }
+
+    public function editReturn(int $returnId): void
+    {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+        $this->resetValidation();
+        $return = SaleReturn::query()->with(['sale.items.product', 'items', 'faultyItems'])->findOrFail($returnId);
+        $service = app(SaleReturnService::class);
+        if ($return->return_type === 'bill_credit') {
+            $invoice = str($return->notes ?? '')->after('Return credited on checkout ')->beforeLast('.')->toString();
+            $checkout = Sale::query()->where('invoice_no', $invoice)->first();
+            if (! $checkout) {
+                $this->addError('returnItems', __('The linked checkout bill could not be found.'));
+                return;
+            }
+            $this->redirect(route('pos.index', ['sale' => $checkout->id]), navigate: true);
+            return;
+        }
+        $service->ensureEditable($return);
+        $sale = $return->sale;
+        abort_unless($sale, 404);
+        $sale->setRelation('returns', $sale->returns()->with('items')->whereKeyNot($return->id)->get());
+        $this->returnItems = $service->availableItems($sale);
+        foreach ($return->items as $returnedItem) {
+            if (! isset($this->returnItems[$returnedItem->product_id])) {
+                continue;
+            }
+            $item = &$this->returnItems[$returnedItem->product_id];
+            $item['quantity'] += $returnedItem->quantity;
+            $item['condition'] = $return->faultyItems->contains('product_id', $returnedItem->product_id) ? 'faulty' : 'restock';
+            $item['original_quantity'] = $item['quantity'];
+            $item['original_subtotal'] = (float) $return->items->where('product_id', $returnedItem->product_id)->sum('subtotal');
+            $item['refund_price'] = (float) $returnedItem->refund_price;
+            $item['subtotal'] = $item['original_subtotal'];
+            unset($item);
+        }
+        $this->selectedReturnId = $return->id;
+        $this->editingReturnId = $return->id;
+        $this->selectedSaleId = $sale->id;
+        $this->returnType = $return->return_type;
+        $this->returnNotes = $return->notes ?? '';
+        $this->returnDetailOpen = false;
+        $this->dispatch('return-editor-opened');
+    }
+
+    public function cancelReturnEdit(): void
+    {
+        $this->editingReturnId = null;
+        $this->selectedSaleId = null;
+        $this->returnItems = [];
+        $this->returnNotes = '';
+        $this->resetValidation();
+    }
+
+    public function deleteReturn(int $returnId, SaleReturnService $service): void
+    {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+        $this->resetValidation();
+        $service->revert(SaleReturn::query()->findOrFail($returnId));
+        if ($this->editingReturnId === $returnId) {
+            $this->cancelReturnEdit();
+        }
+        if ($this->selectedReturnId === $returnId) {
+            $this->selectedReturnId = null;
+            $this->returnDetailOpen = false;
+        }
+        unset($this->selectedReturn, $this->selectedSale, $this->completedReturns, $this->sales);
+        $this->resetPage(pageName: 'returnsPage');
+        Flux::toast(variant: 'success', text: __('Return deleted and stock, refunds, and balances restored.'));
+    }
+
+    public function updatedHistorySearch(): void
+    {
+        $this->resetPage(pageName: 'returnsPage');
+    }
+
+    public function viewReturnDetail(int $returnId): void
+    {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+        SaleReturn::query()->findOrFail($returnId);
+        $this->selectedReturnId = $returnId;
+        $this->returnDetailOpen = true;
+    }
+
+    #[Computed]
+    public function selectedReturn(): ?SaleReturn
+    {
+        return $this->selectedReturnId
+            ? SaleReturn::query()->with(['sale', 'customer', 'items.product', 'faultyItems'])->findOrFail($this->selectedReturnId)
+            : null;
+    }
+
+    #[Computed]
+    public function completedReturns()
+    {
+        return SaleReturn::query()
+            ->with(['sale', 'customer', 'items', 'faultyItems'])
+            ->when(trim($this->historySearch) !== '', function ($query): void {
+                $term = '%'.trim($this->historySearch).'%';
+                $query->where(function ($query) use ($term): void {
+                    $query->where('invoice_no', 'like', $term)
+                        ->orWhereHas('sale', fn ($query) => $query->where('invoice_no', 'like', $term))
+                        ->orWhereHas('customer', fn ($query) => $query->where('name', 'like', $term)->orWhere('phone', 'like', $term));
+                });
+            })
+            ->orderByDesc('date')->orderByDesc('id')
+            ->paginate(10, pageName: 'returnsPage');
     }
 
     #[Computed]
@@ -116,8 +242,7 @@ new #[Title('POS Returns')] class extends Component
             })
             ->orderByDesc('date')
             ->orderByDesc('id')
-            ->limit(8)
-            ->get();
+            ->paginate(8, pageName: 'invoicesPage');
     }
 
     #[Computed]
@@ -127,9 +252,14 @@ new #[Title('POS Returns')] class extends Component
             return null;
         }
 
-        return Sale::query()
-            ->with(['customer', 'items.product', 'returns.items.product'])
+        $sale = Sale::query()
+            ->with(['customer', 'items.product', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])
             ->find($this->selectedSaleId);
+        if ($sale && $this->editingReturnId) {
+            $sale->due_amount = (float) $sale->due_amount + (float) ($sale->returns->firstWhere('id', $this->editingReturnId)?->adjusted_amount ?? 0);
+        }
+
+        return $sale;
     }
 
     #[Computed]
@@ -152,13 +282,46 @@ new #[Title('POS Returns')] class extends Component
         </flux:button>
     </div>
 
+    <flux:error name="returnItems" />
     <section class="app-card p-3 sm:p-4">
+        <h2 class="mb-3 text-lg font-bold">{{ __('Completed Returns') }}</h2>
+        <flux:input wire:model.live.debounce.300ms="historySearch" icon="magnifying-glass" placeholder="Search return, original invoice, customer, or phone..." />
+        <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            @forelse ($this->completedReturns as $return)
+                <article wire:key="completed-return-{{ $return->id }}" class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
+                    <div class="flex flex-wrap justify-between gap-2">
+                        <span class="font-bold">{{ $return->invoice_no }}</span>
+                        <span class="text-sm font-bold text-amber-700 dark:text-amber-300">Rs {{ number_format($return->total_amount, 2) }}</span>
+                    </div>
+                    <p class="mt-1 text-xs text-zinc-500">{{ $return->customer?->name ?? __('Walk-in Customer') }} · {{ $return->sale?->invoice_no ?? '-' }}</p>
+                    <p class="mt-2 text-xs text-zinc-500">{{ $return->date?->format('Y-m-d') }} · {{ $return->type_label }}</p>
+                    <p class="mt-2 text-xs">{{ $return->return_type === 'bill_credit' ? __('Bill credit') : __('Due reduced') }}: Rs {{ number_format((float) $return->adjusted_amount, 2) }} · {{ __('Cash refunded') }}: Rs {{ number_format((float) $return->refund_amount, 2) }}</p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <flux:button size="sm" wire:click="viewReturnDetail({{ $return->id }})">{{ __('View return details') }}</flux:button>
+                        <x-sale-return-actions :return="$return" :inline="true" />
+                    </div>
+                </article>
+            @empty
+                <p class="py-4 text-sm text-zinc-500">{{ __('No completed returns found.') }}</p>
+            @endforelse
+        </div>
+        <div class="mt-3">{{ $this->completedReturns->links() }}</div>
+    </section>
+
+    <section class="app-card p-3 sm:p-4">
+        <div class="mb-3 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-bold">{{ $editingReturnId ? __('Edit Return') : __('New Return') }}</h2>
+            @if ($editingReturnId)
+                <flux:button size="sm" wire:click="cancelReturnEdit">{{ __('Cancel Edit') }}</flux:button>
+            @endif
+        </div>
         <flux:input wire:model.live.debounce.300ms="search" icon="magnifying-glass" placeholder="Search invoice, customer, or phone..." />
 
         <div class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             @forelse ($this->sales as $sale)
                 <button
                     type="button"
+                    wire:key="return-invoice-{{ $sale->id }}"
                     wire:click="selectSale({{ $sale->id }})"
                     @class([
                         'rounded-xl border p-3 text-left transition active:scale-[0.99]',
@@ -190,8 +353,10 @@ new #[Title('POS Returns')] class extends Component
         </div>
     </section>
 
+    <div>{{ $this->sales->links() }}</div>
+
     @if ($this->selectedSale)
-        <section class="grid gap-4 lg:grid-cols-[1fr_360px]">
+        <section x-data @return-editor-opened.window="$el.scrollIntoView({ behavior: 'smooth', block: 'start' })" class="grid gap-4 lg:grid-cols-[1fr_360px]">
             <div class="flex flex-col gap-3">
                 @foreach ($returnItems as $productId => $item)
                     <article class="rounded-xl border border-zinc-100 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900" wire:key="return-product-{{ $productId }}">
@@ -207,7 +372,7 @@ new #[Title('POS Returns')] class extends Component
                         </div>
 
                         <div class="mt-3">
-                            <flux:select wire:model.live="returnItems.{{ $productId }}.condition" size="sm">
+                            <flux:select wire:model.live="returnItems.{{ $productId }}.condition" size="sm" :label="__('Returned condition')">
                                 <option value="faulty">{{ __('Faulty Product') }}</option>
                                 <option value="restock">{{ __('Restock') }}</option>
                             </flux:select>
@@ -245,10 +410,8 @@ new #[Title('POS Returns')] class extends Component
                 <form wire:submit="submitReturn" class="mt-4 flex flex-col gap-4">
                     <flux:select wire:model.live="returnType" :label="__('Return action')">
                         <option value="exchange">{{ __('Same product exchange') }}</option>
-                        @if ($this->selectedSale->customer && $this->selectedSale->customer->due_balance > 0)
-                            <option value="adjust_due">{{ __('Reduce customer due') }} (Rs {{ number_format($this->selectedSale->customer->due_balance, 2) }})</option>
-                        @elseif ($this->selectedSale->due_amount > 0)
-                            <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format($this->selectedSale->due_amount, 2) }})</option>
+                        @if ($this->selectedSale->due_amount > 0)
+                            <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format((float) $this->selectedSale->due_amount, 2) }})</option>
                         @endif
                         <option value="cash_refund">{{ __('Cash refund') }}</option>
                     </flux:select>
@@ -272,16 +435,25 @@ new #[Title('POS Returns')] class extends Component
 
                     <flux:textarea wire:model="returnNotes" :label="__('Notes')" rows="3" placeholder="Reason or condition of returned product." />
 
-                    <flux:button type="submit" variant="primary" icon="arrow-uturn-left" class="w-full">
-                        {{ __('Complete Return') }}
+                    @if ($errors->any())
+                        <ul class="text-xs text-rose-600">
+                            @foreach ($errors->all() as $message)
+                                <li>{{ $message }}</li>
+                            @endforeach
+                        </ul>
+                    @endif
+                    <flux:button type="submit" wire:loading.attr="disabled" wire:target="submitReturn" variant="primary" icon="arrow-uturn-left" class="w-full">
+                        {{ $editingReturnId ? __('Save Return Changes') : __('Complete Return') }}
                     </flux:button>
                 </form>
             </aside>
         </section>
+        <x-sale-return-history :sale="$this->selectedSale" />
     @else
         <section class="rounded-xl border border-dashed border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
             <flux:icon.arrow-uturn-left class="mx-auto size-10 text-zinc-300" />
             <p class="mt-3 text-sm font-bold text-zinc-700 dark:text-zinc-200">{{ __('Choose an invoice to start a return.') }}</p>
         </section>
     @endif
+    <x-sale-return-modal :return="$this->selectedReturn" :allow-manage="true" />
 </div>

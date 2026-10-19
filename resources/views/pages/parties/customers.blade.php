@@ -4,6 +4,7 @@ use App\Models\Customer;
 use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Sale;
+use App\Models\SaleReturn;
 use App\Models\Setting;
 use App\Services\ActivityLogger;
 use App\Services\TextItSmsService;
@@ -43,6 +44,10 @@ new #[Title('Manage Customers')] class extends Component
 
     // Invoice detail drill-down state
     public ?int $selectedSaleId = null;
+
+    public ?int $selectedReturnId = null;
+
+    public bool $returnDetailOpen = false;
 
     // Ledger pagination state (15 per page)
     public int $ledgerOrdersPage = 1;
@@ -123,6 +128,8 @@ new #[Title('Manage Customers')] class extends Component
     {
         $this->selectedCustomerId = $id;
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
         $this->ledgerOrdersPage = 1;
         $this->ledgerPaymentsPage = 1;
     }
@@ -131,18 +138,39 @@ new #[Title('Manage Customers')] class extends Component
     {
         $this->selectedCustomerId = null;
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
         $this->ledgerOrdersPage = 1;
         $this->ledgerPaymentsPage = 1;
     }
 
+    public function viewReturnDetail(int $returnId): void
+    {
+        SaleReturn::query()->where('customer_id', $this->selectedCustomerId)->findOrFail($returnId);
+        $this->selectedReturnId = $returnId;
+        $this->returnDetailOpen = true;
+    }
+
+    #[Computed]
+    public function selectedReturn(): ?SaleReturn
+    {
+        return $this->selectedReturnId
+            ? SaleReturn::query()->where('customer_id', $this->selectedCustomerId)
+                ->with(['sale', 'customer', 'items.product', 'faultyItems'])->findOrFail($this->selectedReturnId)
+            : null;
+    }
+
     public function viewSaleDetail(int $saleId): void
     {
+        Sale::query()->where('customer_id', $this->selectedCustomerId)->findOrFail($saleId);
         $this->selectedSaleId = $saleId;
     }
 
     public function closeSaleDetail(): void
     {
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
     }
 
     public function nextLedgerOrdersPage(): void
@@ -281,7 +309,7 @@ new #[Title('Manage Customers')] class extends Component
     public function selectedSale()
     {
         return $this->selectedSaleId
-            ? Sale::query()->with(['items.product', 'payments', 'customer'])->findOrFail($this->selectedSaleId)
+            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['items.product', 'payments', 'customer', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)
             : null;
     }
 
@@ -414,7 +442,8 @@ new #[Title('Manage Customers')] class extends Component
                 ];
             });
 
-        $returns = \App\Models\SaleReturn::query()
+        $returns = SaleReturn::query()
+            ->with(['sale', 'items'])
             ->where('customer_id', $this->selectedCustomerId)
             ->get()
             ->map(fn ($ret) => [
@@ -426,11 +455,15 @@ new #[Title('Manage Customers')] class extends Component
                 'paid_date' => null,
                 'bill_no' => $ret->invoice_no,
                 'ref' => $ret->invoice_no,
-                'description' => __('Customer return') . ' (' . strtoupper((string) $ret->return_type) . ')',
+                'description' => $ret->type_label.' · '.__('Original invoice').': '.($ret->sale?->invoice_no ?? '-'),
+                'return_value' => $ret->total_amount,
+                'adjustment_label' => $ret->return_type === 'bill_credit' ? __('Bill credit') : __('Due reduced'),
+                'refund_amount' => (float) $ret->refund_amount,
+                'adjusted_amount' => (float) $ret->adjusted_amount,
                 'payment_method' => null,
-                'payment_status' => $ret->return_type,
+                'payment_status' => $ret->type_label,
                 'debit' => 0.00,
-                'credit' => (float) $ret->refund_amount + (float) $ret->adjusted_amount,
+                'credit' => $ret->return_type === 'adjust_due' ? (float) $ret->adjusted_amount : 0.0,
                 'raw_date' => $ret->created_at,
             ]);
 
@@ -946,6 +979,8 @@ new #[Title('Manage Customers')] class extends Component
                                     wire:key="customer-ledger-order-{{ $row['type'] }}-{{ $row['id'] }}"
                                     @if ($row['type'] === 'invoice')
                                         wire:click="viewSaleDetail({{ $row['id'] }})"
+                                    @elseif ($row['type'] === 'return')
+                                        wire:click="viewReturnDetail({{ $row['id'] }})"
                                     @endif
                                 >
                                     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -973,7 +1008,13 @@ new #[Title('Manage Customers')] class extends Component
                                             @endif
                                         </div>
                                         <div class="shrink-0 text-left sm:text-right">
-                                            <span class="text-sm font-bold text-rose-600">+ Rs {{ number_format($row['debit'], 2) }}</span>
+                                            @if ($row['type'] === 'return')
+                                                <span class="text-sm font-bold text-amber-700">{{ __('Return value') }}: Rs {{ number_format($row['return_value'], 2) }}</span>
+                                                <p class="mt-1 text-xs text-zinc-500">{{ $row['adjustment_label'] }}: Rs {{ number_format($row['adjusted_amount'], 2) }}</p>
+                                                <p class="mt-1 text-xs text-zinc-500">{{ __('Cash refunded') }}: Rs {{ number_format($row['refund_amount'], 2) }}</p>
+                                            @else
+                                                <span class="text-sm font-bold text-rose-600">+ Rs {{ number_format($row['debit'], 2) }}</span>
+                                            @endif
                                             <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $row['payment_status'] }}</p>
                                         </div>
                                     </div>
@@ -1319,6 +1360,8 @@ new #[Title('Manage Customers')] class extends Component
                     </div>
                 </div>
 
+                <x-sale-return-history :sale="$this->selectedSale" />
+
                 <div class="app-card p-0 overflow-hidden">
                     <div class="border-b border-zinc-100 p-4">
                         <h4 class="text-xs font-black uppercase tracking-wider text-zinc-500">{{ __('Products') }}</h4>
@@ -1465,4 +1508,5 @@ new #[Title('Manage Customers')] class extends Component
     </div>
 </div>
 
+    <x-sale-return-modal :return="$this->selectedReturn" />
 </div>

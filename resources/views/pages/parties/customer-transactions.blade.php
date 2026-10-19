@@ -18,6 +18,10 @@ new #[Title('Customer Transactions')] class extends Component
 
     public ?int $selectedSaleId = null;
 
+    public ?int $selectedReturnId = null;
+
+    public bool $returnDetailOpen = false;
+
     public ?string $selectedChequeStatus = null;
 
     public string $transactionType = 'all';
@@ -38,6 +42,8 @@ new #[Title('Customer Transactions')] class extends Component
     {
         $this->selectedCustomerId = $customerId;
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
         $this->selectedChequeStatus = null;
     }
 
@@ -45,17 +51,38 @@ new #[Title('Customer Transactions')] class extends Component
     {
         $this->selectedCustomerId = null;
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
         $this->selectedChequeStatus = null;
+    }
+
+    public function viewReturnDetail(int $returnId): void
+    {
+        SaleReturn::query()->where('customer_id', $this->selectedCustomerId)->findOrFail($returnId);
+        $this->selectedReturnId = $returnId;
+        $this->returnDetailOpen = true;
+    }
+
+    #[Computed]
+    public function selectedReturn(): ?SaleReturn
+    {
+        return $this->selectedReturnId
+            ? SaleReturn::query()->where('customer_id', $this->selectedCustomerId)
+                ->with(['sale', 'customer', 'items.product', 'faultyItems'])->findOrFail($this->selectedReturnId)
+            : null;
     }
 
     public function viewSaleDetail(int $saleId): void
     {
+        Sale::query()->where('customer_id', $this->selectedCustomerId)->findOrFail($saleId);
         $this->selectedSaleId = $saleId;
     }
 
     public function closeSaleDetail(): void
     {
         $this->selectedSaleId = null;
+        $this->selectedReturnId = null;
+        $this->returnDetailOpen = false;
     }
 
     public function showChequeList(?string $status = null): void
@@ -120,7 +147,7 @@ new #[Title('Customer Transactions')] class extends Component
     public function selectedSale(): ?Sale
     {
         return $this->selectedSaleId
-            ? Sale::query()->with(['customer', 'items.product', 'payments'])->findOrFail($this->selectedSaleId)
+            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)
             : null;
     }
 
@@ -215,6 +242,7 @@ new #[Title('Customer Transactions')] class extends Component
             });
 
         $returns = SaleReturn::query()
+            ->with(['sale', 'items'])
             ->where('customer_id', $this->selectedCustomerId)
             ->get()
             ->map(fn (SaleReturn $return): array => [
@@ -223,12 +251,17 @@ new #[Title('Customer Transactions')] class extends Component
                 'date' => $return->date,
                 'invoice_no' => $return->invoice_no,
                 'invoice_id' => null,
-                'description' => __('Customer return') . ' (' . strtoupper((string) $return->return_type) . ')',
+                'description' => $return->type_label.' · '.__('Original invoice').': '.($return->sale?->invoice_no ?? '-'),
+                'return_id' => $return->id,
+                'return_value' => $return->total_amount,
+                'adjustment_label' => $return->return_type === 'bill_credit' ? __('Bill credit') : __('Due reduced'),
+                'refund_amount' => (float) $return->refund_amount,
+                'adjusted_amount' => (float) $return->adjusted_amount,
                 'payment_method' => null,
                 'cheque_status' => null,
                 'status' => $return->return_type,
                 'debit' => 0.00,
-                'credit' => (float) $return->refund_amount + (float) $return->adjusted_amount,
+                'credit' => $return->return_type === 'adjust_due' ? (float) $return->adjusted_amount : 0.0,
                 'pending_amount' => null,
                 'raw_date' => $return->created_at,
             ]);
@@ -511,7 +544,9 @@ new #[Title('Customer Transactions')] class extends Component
                                     <td class="px-4 py-3 font-semibold text-zinc-600">{{ $row['date']?->format('Y-m-d') }}</td>
                                     <td class="px-4 py-3 font-bold text-zinc-900">{{ $row['label'] }}</td>
                                     <td class="px-4 py-3">
-                                        @if ($row['invoice_id'])
+                                        @if ($row['type'] === 'return')
+                                            <button type="button" wire:click="viewReturnDetail({{ $row['return_id'] }})" class="font-bold text-violet-600 hover:underline">{{ $row['invoice_no'] }}</button>
+                                        @elseif ($row['invoice_id'])
                                             <button type="button" wire:click="viewSaleDetail({{ $row['invoice_id'] }})" class="font-black text-violet-600 underline-offset-4 hover:underline">
                                                 {{ $row['invoice_no'] }}
                                             </button>
@@ -519,6 +554,9 @@ new #[Title('Customer Transactions')] class extends Component
                                             <span class="font-semibold text-zinc-600">{{ $row['invoice_no'] }}</span>
                                         @endif
                                         <p class="mt-0.5 text-xs text-zinc-500">{{ $row['description'] }}</p>
+                                        @if ($row['type'] === 'return')
+                                            <p class="mt-1 text-xs text-amber-700">{{ __('Return value') }}: Rs {{ number_format($row['return_value'], 2) }} · {{ __('Cash refunded') }}: Rs {{ number_format($row['refund_amount'], 2) }} · {{ $row['adjustment_label'] }}: Rs {{ number_format($row['adjusted_amount'], 2) }}</p>
+                                        @endif
                                         @if (! empty($row['cheque_no']) || ! empty($row['reference']))
                                             <p class="mt-0.5 text-xs font-semibold text-zinc-600">
                                                 {{ __('Reference') }}: {{ $row['cheque_no'] ?: $row['reference'] }}
@@ -567,13 +605,18 @@ new #[Title('Customer Transactions')] class extends Component
                                 <span class="rounded-full bg-white/80 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-zinc-600">{{ str((string) $row['status'])->headline() }}</span>
                             </div>
                             <p class="mt-3 text-xs font-semibold text-zinc-600">{{ $row['description'] }}</p>
+                                        @if ($row['type'] === 'return')
+                                            <p class="mt-1 text-xs text-amber-700">{{ __('Return value') }}: Rs {{ number_format($row['return_value'], 2) }} · {{ __('Cash refunded') }}: Rs {{ number_format($row['refund_amount'], 2) }} · {{ $row['adjustment_label'] }}: Rs {{ number_format($row['adjusted_amount'], 2) }}</p>
+                                        @endif
                             @if (! empty($row['cheque_no']) || ! empty($row['reference']))
                                 <p class="mt-1 text-xs font-semibold text-zinc-600">
                                     {{ __('Reference') }}: {{ $row['cheque_no'] ?: $row['reference'] }}
                                 </p>
                             @endif
                             <div class="mt-3 flex items-center justify-between gap-3">
-                                @if ($row['invoice_id'])
+                                @if ($row['type'] === 'return')
+                                    <button type="button" wire:click="viewReturnDetail({{ $row['return_id'] }})" class="text-sm font-bold text-violet-600">{{ $row['invoice_no'] }}</button>
+                                @elseif ($row['invoice_id'])
                                     <button type="button" wire:click="viewSaleDetail({{ $row['invoice_id'] }})" class="text-sm font-black text-violet-600">{{ $row['invoice_no'] }}</button>
                                 @else
                                     <span class="text-sm font-bold text-zinc-700">{{ $row['invoice_no'] }}</span>
@@ -615,6 +658,8 @@ new #[Title('Customer Transactions')] class extends Component
                     <div class="rounded-2xl border border-zinc-100 p-4"><p class="text-[10px] font-black uppercase text-zinc-400">{{ __('Paid') }}</p><p class="mt-1 text-lg font-black text-emerald-600">Rs {{ number_format((float) ($this->selectedSale?->paid_amount ?? 0), 2) }}</p></div>
                     <div class="rounded-2xl border border-zinc-100 p-4"><p class="text-[10px] font-black uppercase text-zinc-400">{{ __('Due') }}</p><p class="mt-1 text-lg font-black text-rose-600">Rs {{ number_format((float) ($this->selectedSale?->due_amount ?? 0), 2) }}</p></div>
                 </div>
+
+                <x-sale-return-history :sale="$this->selectedSale" />
 
                 <div class="mt-4 rounded-2xl border border-zinc-100">
                     @forelse ($this->selectedSale?->items ?? [] as $item)
@@ -698,4 +743,5 @@ new #[Title('Customer Transactions')] class extends Component
             </div>
         </div>
     </div>
+    <x-sale-return-modal :return="$this->selectedReturn" />
 </div>

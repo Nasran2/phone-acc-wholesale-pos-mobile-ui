@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -20,6 +21,27 @@ class SaleReturn extends Model
             'refund_amount' => 'decimal:2',
             'adjusted_amount' => 'decimal:2',
         ];
+    }
+
+    protected function totalAmount(): Attribute
+    {
+        return Attribute::get(fn (): float => round((float) $this->items->sum('subtotal'), 2));
+    }
+
+    protected function typeLabel(): Attribute
+    {
+        return Attribute::get(fn (): string => match ($this->return_type) {
+            'exchange' => __('Same product exchange'),
+            'adjust_due' => __('Invoice due reduction'),
+            'cash_refund' => __('Cash refund'),
+            'bill_credit' => __('Credit on another bill'),
+            default => str($this->return_type)->replace('_', ' ')->headline()->toString(),
+        });
+    }
+
+    public function faultyItems(): HasMany
+    {
+        return $this->hasMany(FaultyItem::class, 'source_sale_return_id');
     }
 
     public function sale(): BelongsTo

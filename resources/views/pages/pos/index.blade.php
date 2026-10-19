@@ -12,10 +12,12 @@ use App\Models\Setting;
 use App\Services\ActivityLogger;
 use App\Services\ChequePaymentService;
 use App\Services\SmsNotificationService;
+use App\Services\SaleReturnService;
 use App\Services\TextItSmsService;
 use Flux\Flux;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
@@ -176,7 +178,7 @@ new #[Title('POS Terminal')] class extends Component
                         ->where('quantity', '>', 0)
                         ->first();
 
-                    $max = $saleItemForMax ? $this->maxReturnableQuantityForSaleItem($saleItemForMax) + $returnItem->quantity : $returnItem->quantity;
+                    $max = $saleItemForMax ? $this->maxReturnableQuantityForSaleItem($saleItemForMax) : $returnItem->quantity;
 
                     $this->returnCredits[$key] = [
                         'sale_id' => $saleReturn->sale_id,
@@ -225,6 +227,19 @@ new #[Title('POS Terminal')] class extends Component
             }
 
             $this->paid_amount = (float) $sale->paid_amount;
+            $this->paymentRows = $sale->payments->map(fn (Payment $payment): array => [
+                'amount' => (float) $payment->amount,
+                'method' => $payment->payment_method,
+                'reference' => $payment->reference ?? '',
+                'cheque_bank' => $payment->cheque_bank ?? '',
+                'cheque_no' => $payment->cheque_no ?? '',
+                'cheque_date' => $payment->cheque_date?->toDateString() ?? '',
+            ])->all();
+
+            if ($this->paymentRows === []) {
+                $this->paymentRows = [$this->blankPaymentRow()];
+                $this->paymentRows[0]['amount'] = (float) $sale->paid_amount;
+            }
         } else {
             $defaultCust = Customer::query()->where('name', 'Walk-in Customer')->first();
             if ($defaultCust) {
@@ -603,7 +618,8 @@ new #[Title('POS Terminal')] class extends Component
             ->whereHas('sale', fn($query) => $query->where('customer_id', $this->customer_id))
             ->findOrFail($saleItemId);
 
-        $maxReturnable = $this->maxReturnableQuantityForSaleItem($saleItem);
+        $availableItem = $this->availableReturnCreditItem($saleItem);
+        $maxReturnable = $availableItem['max'] ?? 0;
 
         if ($maxReturnable <= 0) {
             Flux::toast(variant: 'danger', text: __('This sold product has already been fully returned.'));
@@ -625,14 +641,16 @@ new #[Title('POS Terminal')] class extends Component
             'sku' => (string) ($saleItem->product?->sku ?? ''),
             'quantity' => 1,
             'max' => $maxReturnable,
-            'return_price' => (float) $saleItem->selling_price,
-            'unit_cost' => (float) $saleItem->cost_price,
-            'subtotal' => round((float) $saleItem->selling_price, 2),
+            'return_price' => $availableItem['refund_price'],
+            'unit_cost' => $availableItem['unit_cost'],
+            'subtotal' => app(SaleReturnService::class)->subtotalFor($availableItem, 1),
         ];
 
         $this->returnSearch = '';
-        $this->paid_amount = $this->cartTotal;
-        $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        if (! $this->editingSale) {
+            $this->paid_amount = $this->cartTotal;
+            $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        }
     }
 
     public function updateReturnCreditQty(string $key, int|string|null $quantity): void
@@ -662,8 +680,10 @@ new #[Title('POS Terminal')] class extends Component
     public function removeReturnCredit(string $key): void
     {
         unset($this->returnCredits[$key]);
-        $this->paid_amount = $this->cartTotal;
-        $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        if (! $this->editingSale) {
+            $this->paid_amount = $this->cartTotal;
+            $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        }
     }
 
     public function updatedPaidAmount(): void
@@ -706,12 +726,26 @@ new #[Title('POS Terminal')] class extends Component
 
     public function submitCheckout(SmsNotificationService $smsNotificationService): void
     {
+        $isEditingSale = (bool) $this->editingSale;
+        $sale = DB::transaction(fn (): ?Sale => $this->persistCheckout());
+
+        if ($sale && ! $isEditingSale) {
+            $smsNotificationService->notifySaleCreated($sale);
+        }
+    }
+
+    private function persistCheckout(): ?Sale
+    {
 
         $rules = [
             'customer_id' => 'required|exists:customers,id',
             'saleDate' => 'required|date',
             'cart' => 'array',
             'returnCredits' => 'array',
+            'returnCredits.*.quantity' => 'required|integer|min:1',
+            'returnCredits.*.return_price' => 'required|numeric|min:0',
+            'returnCredits.*.sale_id' => 'required|integer|min:0',
+            'returnCredits.*.product_id' => 'required|integer|exists:products,id',
             'discount' => 'required|numeric|min:0',
             'tax' => 'required|numeric|min:0',
             'paymentRows' => 'required|array|min:1',
@@ -727,15 +761,17 @@ new #[Title('POS Terminal')] class extends Component
 
         if (count($this->cart) === 0 && count($this->returnCredits) === 0) {
             $this->addError('cart', __('Add at least one sale product or return item.'));
-            return;
+            return null;
         }
 
         if (count($this->returnCredits) > 0) {
+            abort_unless(auth()->user()->hasPermission('process_return'), 403);
+            Sale::query()->whereIn('id', collect($this->returnCredits)->pluck('sale_id')->filter())->orderBy('id')->lockForUpdate()->get();
             $customer = Customer::query()->find($this->customer_id);
 
             if (! $customer || $customer->phone === '0000000000' || strtolower($customer->name) === 'walk-in customer') {
                 $this->addError('customer_id', __('Select the real customer before adding return items.'));
-                return;
+                return null;
             }
 
             foreach ($this->returnCredits as $key => $returnCredit) {
@@ -748,13 +784,29 @@ new #[Title('POS Terminal')] class extends Component
 
                 if (! $saleItem || (int) ($returnCredit['quantity'] ?? 0) > $this->maxReturnableQuantityForSaleItem($saleItem)) {
                     $this->addError('returnCredits', __('One of the return items is no longer available to return.'));
-                    return;
+                    return null;
                 }
 
+                $availableItem = $this->availableReturnCreditItem($saleItem);
+                if (! $availableItem || (float) $returnCredit['return_price'] > $availableItem['refund_price']
+                    || (string) $key !== $this->returnCreditKey((int) $returnCredit['sale_id'], (int) $returnCredit['product_id'])) {
+                    $this->addError('returnCredits', __('Return credit cannot exceed the original invoice value.'));
+                    return null;
+                }
+                $this->returnCredits[$key]['unit_cost'] = $availableItem['unit_cost'];
                 $this->syncReturnCreditSubtotal((string) $key, false);
             }
         }
 
+        foreach (collect($this->returnCredits)->groupBy('sale_id') as $saleId => $credits) {
+            $originalSale = $this->originalSaleForReturnCredit((int) $saleId);
+            if ((float) $credits->sum('subtotal') > app(SaleReturnService::class)->availableRefund($originalSale)) {
+                $this->addError('returnCredits', __('The return credit exceeds the remaining paid amount on the original invoice. Use invoice due reduction for unpaid returns.'));
+                return null;
+            }
+        }
+
+        Customer::query()->lockForUpdate()->findOrFail($this->customer_id);
         $paymentRows = $this->normalisedPaymentRows();
         $hasChequePayment = collect($paymentRows)->contains(fn(array $paymentRow): bool => $paymentRow['method'] === 'cheque');
 
@@ -762,14 +814,14 @@ new #[Title('POS Terminal')] class extends Component
             $customer = Customer::query()->find($this->customer_id);
             if (! $customer || $customer->phone === '0000000000' || strtolower($customer->name) === 'walk-in customer') {
                 $this->addError('customer_id', __('Cheque payments are not allowed for Walk-in Customer. Please select a registered customer.'));
-                return;
+                return null;
             }
         }
 
         foreach ($paymentRows as $index => $paymentRow) {
             if ($paymentRow['method'] === 'cheque' && blank($paymentRow['cheque_date'])) {
                 $this->addError("paymentRows.{$index}.cheque_date", __('Cheque date is required.'));
-                return;
+                return null;
             }
         }
 
@@ -778,7 +830,7 @@ new #[Title('POS Terminal')] class extends Component
 
         if ($this->paymentRowsTotal($paymentRows) > $grandTotal) {
             $this->addError('paymentRows', __('Payment rows cannot exceed the sale grand total.'));
-            return;
+            return null;
         }
 
         $capturedPaidAmount = $this->capturedPaymentRowsTotal($paymentRows);
@@ -787,7 +839,7 @@ new #[Title('POS Terminal')] class extends Component
 
         if ($dueAmount > 0 && Setting::get('pos_allow_due_sale', '1') === '0') {
             Flux::toast(variant: 'danger', text: __('Due sales disabled in system settings. Full payment required.'));
-            return;
+            return null;
         }
 
         $paymentStatus = 'due';
@@ -811,8 +863,6 @@ new #[Title('POS Terminal')] class extends Component
 
         $sale = null;
         $invoiceNo = '';
-
-        $isEditingSale = (bool) $this->editingSale;
 
         if ($this->editingSale) {
             $sale = $this->editingSale;
@@ -944,11 +994,9 @@ new #[Title('POS Terminal')] class extends Component
         $this->cartDrawerOpen = false;
         $this->successOpen = true;
 
-        if (! $isEditingSale) {
-            $smsNotificationService->notifySaleCreated($sale);
-        }
-
         $this->resetCart();
+
+        return $sale;
     }
 
     public function triggerSMSNotification(TextItSmsService $smsService): void
@@ -1092,7 +1140,7 @@ new #[Title('POS Terminal')] class extends Component
     #[Computed]
     public function cartTotal()
     {
-        return round(max(0.00, ($this->cartSubtotal + (float) $this->tax) - $this->cartDiscountAmount - $this->returnCreditsTotal), 2);
+        return round(max(0.00, ($this->cartSubtotal + (float) $this->tax) - $this->cartDiscountAmount), 2);
     }
 
     #[Computed]
@@ -1210,7 +1258,7 @@ new #[Title('POS Terminal')] class extends Component
 
         $this->returnCredits[$key]['subtotal'] = round($quantity * $returnPrice, 2);
         
-        if ($syncPayment) {
+        if ($syncPayment && ! $this->editingSale) {
             $this->paid_amount = $this->cartTotal;
             $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
         }
@@ -1221,20 +1269,28 @@ new #[Title('POS Terminal')] class extends Component
         return $saleId . '-' . $productId;
     }
 
+    private function originalSaleForReturnCredit(int $saleId): Sale
+    {
+        $sale = Sale::query()->with(['items.product', 'returns.items'])->findOrFail($saleId);
+
+        if ($this->editingSale) {
+            $sale->setRelation('returns', $sale->returns->reject(
+                fn (SaleReturn $return): bool => $return->return_type === 'bill_credit'
+                    && $return->notes === 'Return credited on checkout '.$this->editingSale->invoice_no.'.'
+            ));
+        }
+
+        return $sale;
+    }
+
+    private function availableReturnCreditItem(SaleItem $saleItem): ?array
+    {
+        return app(SaleReturnService::class)->availableItems($this->originalSaleForReturnCredit((int) $saleItem->sale_id))[(int) $saleItem->product_id] ?? null;
+    }
+
     public function maxReturnableQuantityForSaleItem(SaleItem $saleItem): int
     {
-        $soldQuantity = (int) SaleItem::query()
-            ->where('sale_id', $saleItem->sale_id)
-            ->where('product_id', $saleItem->product_id)
-            ->where('quantity', '>', 0)
-            ->sum('quantity');
-
-        $returnedQuantity = (int) SaleReturnItem::query()
-            ->whereHas('returnLog', fn($query) => $query->where('sale_id', $saleItem->sale_id))
-            ->where('product_id', $saleItem->product_id)
-            ->sum('quantity');
-
-        return max(0, $soldQuantity - $returnedQuantity);
+        return $this->availableReturnCreditItem($saleItem)['max'] ?? 0;
     }
 
     private function recordCheckoutReturnCredits(Sale $checkoutSale): void

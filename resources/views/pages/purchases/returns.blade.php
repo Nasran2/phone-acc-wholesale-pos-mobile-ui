@@ -31,21 +31,23 @@ new #[Title('Purchase Returns')] class extends Component
         return Supplier::orderBy('name')->get();
     }
 
-    public function processReturn()
+    public function processReturn(): void
     {
         $this->validate([
             'selectedFaultyItems' => 'required|array|min:1',
+            'selectedFaultyItems.*' => 'required|integer|min:1|distinct',
             'selectedSupplierId' => 'required|exists:suppliers,id',
             'returnType' => 'required|in:exchange,adjust_due,cash_refund',
         ]);
 
-        $itemsToReturn = FaultyItem::whereIn('id', $this->selectedFaultyItems)->where('status', 'pending')->get();
-        if ($itemsToReturn->isEmpty()) {
-            Flux::toast(__('No valid faulty items selected.'))->variant('danger');
-            return;
-        }
+        DB::transaction(function (): void {
+            $itemsToReturn = FaultyItem::query()->with('product')->whereIn('id', $this->selectedFaultyItems)
+                ->where('status', 'pending')->orderBy('id')->lockForUpdate()->get();
+            if ($itemsToReturn->count() !== count(array_unique($this->selectedFaultyItems))) {
+                $this->addError('selectedFaultyItems', __('Some selected faulty items have already been changed or returned. Refresh the list and try again.'));
+                return;
+            }
 
-        DB::transaction(function () use ($itemsToReturn) {
             $supplier = Supplier::findOrFail($this->selectedSupplierId);
 
             $refundTotal = 0;
@@ -104,7 +106,7 @@ new #[Title('Purchase Returns')] class extends Component
                 }
             }
 
-            Flux::toast(__('Purchase Return processed successfully. Return #: ' . $returnNo))->variant('success');
+            Flux::toast(variant: 'success', text: __('Purchase Return processed successfully. Return #: ').$returnNo);
             
             $this->reset(['selectedFaultyItems', 'selectedSupplierId', 'returnType', 'notes']);
         });

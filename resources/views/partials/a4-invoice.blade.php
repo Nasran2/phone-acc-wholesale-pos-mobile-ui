@@ -273,6 +273,8 @@
             </div>
         </section>
 
+        <x-sale-return-history :sale="$sale" />
+
         <!-- Terms and Conditions -->
         <section class="mt-5 rounded-lg border border-violet-50 bg-violet-50/30 p-3.5">
             <h3 class="text-[10px] font-bold uppercase tracking-wider text-violet-700">Terms & Conditions</h3>

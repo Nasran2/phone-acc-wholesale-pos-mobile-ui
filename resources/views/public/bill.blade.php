@@ -212,6 +212,8 @@
                 </div>
             </section>
 
+            <x-sale-return-history :sale="$sale" />
+
             <section class="mt-8 rounded-xl border border-violet-100 bg-violet-50/40 p-5">
                 <p class="text-xs font-bold uppercase tracking-wide text-violet-700">{{ __('Terms & Conditions') }}</p>
                 <p class="mt-2 text-sm leading-6 text-slate-600">{{ $terms }}</p>

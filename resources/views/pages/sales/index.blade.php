@@ -74,26 +74,7 @@ new #[Title('Sales Receipts')] class extends Component
         $sale = Sale::query()->with('items.product')->findOrFail($this->viewingSaleId);
 
         $this->returnItems = [];
-        foreach ($sale->items as $item) {
-            // Check if already returned in other receipts, max return limit
-            $alreadyReturned = \App\Models\SaleReturnItem::query()
-                ->whereHas('returnLog', fn($q) => $q->where('sale_id', $sale->id))
-                ->where('product_id', $item->product_id)
-                ->sum('quantity');
-
-            $maxReturnable = max(0, $item->quantity - $alreadyReturned);
-
-            if ($maxReturnable > 0) {
-                $this->returnItems[$item->product_id] = [
-                    'name' => $item->product?->name,
-                    'sku' => $item->product?->sku,
-                    'quantity' => 0,
-                    'refund_price' => (float) $item->selling_price,
-                    'max' => $maxReturnable,
-                    'subtotal' => 0.00,
-                ];
-            }
-        }
+        $this->returnItems = app(SaleReturnService::class)->availableItems($sale);
 
         if (count($this->returnItems) === 0) {
             Flux::toast(variant: 'danger', text: __('All items in this invoice have already been returned.'));
@@ -117,12 +98,14 @@ new #[Title('Sales Receipts')] class extends Component
             $qty = min($max, max(0, $qty));
 
             $this->returnItems[$productId]['quantity'] = $qty;
-            $this->returnItems[$productId]['subtotal'] = $qty * $this->returnItems[$productId]['refund_price'];
+            $this->returnItems[$productId]['subtotal'] = app(SaleReturnService::class)->subtotalFor($this->returnItems[$productId], $qty);
         }
     }
 
     public function submitReturn(SaleReturnService $returnService, TextItSmsService $smsService): void
     {
+        abort_unless(auth()->user()->hasPermission('process_return'), 403);
+
         $this->validate([
             'returnItems' => 'required|array',
             'returnType' => 'required|in:cash_refund,adjust_due,exchange',
@@ -132,13 +115,6 @@ new #[Title('Sales Receipts')] class extends Component
         $sale = Sale::query()->with(['customer', 'items.product'])->findOrFail($this->viewingSaleId);
         $customer = $sale->customer;
 
-        $refundTotal = 0.00;
-        foreach ($this->returnItems as $item) {
-            if ($item['quantity'] > 0) {
-                $refundTotal += $item['subtotal'];
-            }
-        }
-
         $retLog = $returnService->process($sale, $this->returnItems, $this->returnType, $this->returnNotes);
         Flux::toast(variant: 'success', text: __('Return transaction logged successfully.'));
 
@@ -147,7 +123,7 @@ new #[Title('Sales Receipts')] class extends Component
             $msg = $smsService->parseTemplate($template, [
                 'customer_name' => $customer->name,
                 'invoice_no' => $sale->invoice_no,
-                'total' => number_format($refundTotal, 2),
+                'total' => number_format($retLog->total_amount, 2),
             ]);
             $smsService->sendSms($customer->phone, $msg, 'RET-'.$retLog->id);
         }
@@ -163,7 +139,7 @@ new #[Title('Sales Receipts')] class extends Component
             return;
         }
 
-        $saleReturn = \App\Models\SaleReturn::query()->findOrFail($returnId);
+        $saleReturn = \App\Models\SaleReturn::query()->where('sale_id', $this->viewingSaleId)->findOrFail($returnId);
 
         $returnService->revert($saleReturn);
 
@@ -176,9 +152,16 @@ new #[Title('Sales Receipts')] class extends Component
 
         DB::transaction(function () use (&$invoiceNo): void {
             $sale = Sale::query()
-                ->with(['customer', 'items', 'payments', 'returns.items', 'returns.payments'])
+                ->with(['customer', 'items', 'payments', 'returns.items', 'returns.payments', 'returns.faultyItems'])
                 ->lockForUpdate()
                 ->findOrFail($this->viewingSaleId);
+
+            if ($sale->returns->contains('return_type', 'bill_credit')
+                || $sale->returns->flatMap->faultyItems->contains('status', 'returned')) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'returnItems' => __('This invoice has returns linked to another bill or supplier return and cannot be deleted here.'),
+                ]);
+            }
 
             $invoiceNo = $sale->invoice_no;
             $stockAdjustments = [];
@@ -200,9 +183,10 @@ new #[Title('Sales Receipts')] class extends Component
                     $returnQuantity = (int) $returnItem->quantity;
                     $stockAdjustments[$returnItem->product_id] ??= 0;
 
-                    if ($return->return_type === 'exchange') {
+                    $wasFaulty = $return->faultyItems->contains('product_id', $returnItem->product_id);
+                    if ($return->return_type === 'exchange' && $wasFaulty) {
                         $stockAdjustments[$returnItem->product_id] += $returnQuantity;
-                    } else {
+                    } elseif ($return->return_type !== 'exchange' && ! $wasFaulty) {
                         $stockAdjustments[$returnItem->product_id] -= $returnQuantity;
                     }
                 }
@@ -229,6 +213,8 @@ new #[Title('Sales Receipts')] class extends Component
 
             foreach ($sale->returns as $return) {
                 $return->payments()->delete();
+                $return->faultyItems()->delete();
+                \App\Models\Expense::query()->where('reference', $return->invoice_no)->where('category', 'Product Return Replacement Cost')->delete();
                 $return->items()->delete();
                 $return->delete();
             }
@@ -378,7 +364,7 @@ new #[Title('Sales Receipts')] class extends Component
         if (! $this->viewingSaleId) return null;
 
         return Sale::query()
-            ->with(['customer', 'items.product', 'payments', 'returns.items.product'])
+            ->with(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.faultyItems', 'returns.sale'])
             ->findOrFail($this->viewingSaleId);
     }
 
@@ -825,43 +811,8 @@ new #[Title('Sales Receipts')] class extends Component
                         @endforeach
                     </div>
 
-                    <!-- Returns list histories if any exists -->
-                    @if (count($this->selectedSale->returns) > 0)
-                        <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">
-                            <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider text-rose-600">{{ __('Invoice Returns History') }}</h4>
-
-                            @foreach ($this->selectedSale->returns as $ret)
-                                <div class="flex flex-col gap-2 rounded-2xl bg-rose-50/20 border border-rose-100 p-3 text-xs">
-                                    <div class="flex justify-between items-center font-bold text-zinc-900">
-                                        <span>{{ $ret->invoice_no }}</span>
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-rose-600">Rs {{ number_format($ret->refund_amount + $ret->adjusted_amount, 2) }}</span>
-                                            <button
-                                                type="button"
-                                                wire:click="revertReturn({{ $ret->id }})"
-                                                wire:confirm="Are you sure you want to completely revert and delete this return log? This action will restore stock and financials."
-                                                class="text-zinc-400 hover:text-rose-600 transition"
-                                                title="Revert Return"
-                                            >
-                                                <flux:icon.trash class="size-4" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <span class="text-[10px] text-zinc-400">{{ $ret->date->format('Y-m-d') }} | Type: {{ str_replace('_', ' ', strtoupper($ret->return_type)) }}</span>
-
-                                    <!-- Items returned list in this log -->
-                                    <div class="flex flex-col gap-1 border-t border-rose-100/50 pt-2 mt-1">
-                                        @foreach ($ret->items as $ri)
-                                            <div class="flex justify-between text-[10px] text-zinc-600">
-                                                <span>{{ $ri->product?->name }} (x{{ $ri->quantity }})</span>
-                                                <span>Rs {{ number_format($ri->subtotal, 2) }}</span>
-                                            </div>
-                                        @endforeach
-                                    </div>
-                                </div>
-                            @endforeach
-                        </div>
-                    @endif
+                    <flux:error name="returnItems" />
+                    <x-sale-return-history :sale="$this->selectedSale" :allow-revert="true" />
 
                     <!-- Quick Print / Returns Actions drawer footer -->
                     <div class="border-t border-zinc-100 pt-4 flex flex-col gap-2">
@@ -982,6 +933,10 @@ new #[Title('Sales Receipts')] class extends Component
                             <span class="text-xs font-semibold text-zinc-500">Limit: {{ $item['max'] }}</span>
                         </div>
 
+                        <flux:select wire:model="returnItems.{{ $prodId }}.condition" size="sm" :label="__('Returned condition')">
+                            <option value="restock">{{ __('Restock') }}</option>
+                            <option value="faulty">{{ __('Faulty Product') }}</option>
+                        </flux:select>
                         <!-- Qty Selector row -->
                         <div class="flex items-center justify-between border-t border-zinc-100 pt-2 text-xs">
                             <div class="flex items-center gap-1 bg-white rounded-xl border border-zinc-200 p-0.5">
@@ -998,19 +953,19 @@ new #[Title('Sales Receipts')] class extends Component
 
             <!-- Parameters form & submit -->
             <form wire:submit="submitReturn" class="border-t border-zinc-100 pt-3 flex flex-col gap-3">
+                <flux:error name="returnItems" />
+                <flux:error name="returnType" />
                 <flux:select wire:model="returnType" :label="__('Return Compensation Mode')">
                     <option value="cash_refund">Cash Refund (Withdraw cash)</option>
-                    @if (App\Models\Sale::find($this->viewingSaleId)?->customer?->due_balance > 0)
-                        <option value="adjust_due">{{ __('Reduce customer due') }} (Rs {{ number_format(App\Models\Sale::find($this->viewingSaleId)->customer->due_balance, 2) }})</option>
-                    @elseif (App\Models\Sale::find($this->viewingSaleId)?->due_amount > 0)
-                        <option value="adjust_due">Reduce Invoice Due Account Balance</option>
+                    @if ((float) ($this->selectedSale?->due_amount ?? 0) > 0)
+                        <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format((float) $this->selectedSale->due_amount, 2) }})</option>
                     @endif
                     <option value="exchange">Same Product Exchange (Record cost as expense)</option>
                 </flux:select>
 
                 <flux:textarea wire:model="returnNotes" :label="__('Ledger Return Notes')" rows="2" placeholder="Returned accessories." />
 
-                <flux:button type="submit" variant="primary" class="w-full mt-1">
+                <flux:button type="submit" wire:loading.attr="disabled" wire:target="submitReturn" variant="primary" class="w-full mt-1">
                     {{ __('Complete Return') }}
                 </flux:button>
             </form>
@@ -1230,6 +1185,7 @@ new #[Title('Sales Receipts')] class extends Component
                         <p class="text-[8px] text-zinc-600 mt-2">Powered by {{ $devName }}</p>
                     @endif
                 </div>
+                <x-sale-return-history :sale="$this->selectedSale" />
             </div>
         @endif
     @endif
