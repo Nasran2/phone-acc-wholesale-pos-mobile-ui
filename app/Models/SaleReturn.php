@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 
-#[Fillable(['sale_id', 'customer_id', 'invoice_no', 'date', 'return_type', 'refund_amount', 'adjusted_amount', 'notes'])]
+#[Fillable(['sale_id', 'customer_id', 'invoice_no', 'date', 'return_type', 'refund_amount', 'adjusted_amount', 'notes', 'due_allocations', 'checkout_sale_id'])]
 class SaleReturn extends Model
 {
     protected $table = 'returns';
@@ -20,6 +20,8 @@ class SaleReturn extends Model
             'date' => 'date',
             'refund_amount' => 'decimal:2',
             'adjusted_amount' => 'decimal:2',
+            'due_allocations' => 'array',
+            'checkout_sale_id' => 'integer',
         ];
     }
 
@@ -32,7 +34,7 @@ class SaleReturn extends Model
     {
         return Attribute::get(fn (): string => match ($this->return_type) {
             'exchange' => __('Same product exchange'),
-            'adjust_due' => __('Invoice due reduction'),
+            'adjust_due' => __('Customer due reduction'),
             'cash_refund' => __('Cash refund'),
             'bill_credit' => __('Credit on another bill'),
             default => str($this->return_type)->replace('_', ' ')->headline()->toString(),

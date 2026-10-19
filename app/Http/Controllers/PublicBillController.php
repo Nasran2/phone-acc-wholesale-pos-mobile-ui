@@ -13,7 +13,7 @@ class PublicBillController extends Controller
     public function __invoke(Sale $sale): View
     {
         return view('public.bill', [
-            'sale' => $sale->load(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.sale', 'returns.faultyItems']),
+            'sale' => $sale->load(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->loadDueCredits(),
         ]);
     }
 }

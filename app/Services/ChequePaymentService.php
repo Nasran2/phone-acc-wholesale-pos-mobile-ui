@@ -381,7 +381,7 @@ class ChequePaymentService
             ->where('cheque_status', 'pending')
             ->sum('amount');
         $paidAmount = (float) $sale->paid_amount;
-        $dueAmount = round(max(0, (float) $sale->grand_total - $paidAmount - $pendingChequeAmount), 2);
+        $dueAmount = round(max(0, (float) $sale->grand_total - $paidAmount - $pendingChequeAmount - app(SaleReturnService::class)->dueReductionFor($sale)), 2);
 
         $status = 'cheque_pending';
         if ($pendingChequeAmount <= 0 && $dueAmount <= 0) {

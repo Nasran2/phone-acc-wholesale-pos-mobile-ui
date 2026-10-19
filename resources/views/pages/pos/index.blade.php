@@ -48,6 +48,8 @@ new #[Title('POS Terminal')] class extends Component
     public string $customerSearch = '';
     public string $returnSearch = '';
     public array $returnCredits = [];
+
+    public string $returnCompensation = 'bill_credit';
     public string $quickCustomerName = '';
     public string $quickCustomerPhone = '';
     public string $quickCustomerEmail = '';
@@ -164,10 +166,11 @@ new #[Title('POS Terminal')] class extends Component
             // Load Return Credits for this checkout
             $saleReturns = SaleReturn::query()
                 ->with('items.product')
-                ->where('notes', 'like', 'Return credited on checkout ' . $sale->invoice_no . '.%')
+                ->where(fn ($query) => $query->where('checkout_sale_id', $sale->id)->orWhere('notes', 'like', 'Return credited on checkout ' . $sale->invoice_no . '.%'))
                 ->get();
 
             foreach ($saleReturns as $saleReturn) {
+                $this->returnCompensation = $saleReturn->return_type === 'adjust_due' ? 'adjust_due' : 'bill_credit';
                 $originalSale = Sale::query()->find($saleReturn->sale_id);
                 foreach ($saleReturn->items as $returnItem) {
                     $key = $this->returnCreditKey($saleReturn->sale_id, $returnItem->product_id);
@@ -686,6 +689,16 @@ new #[Title('POS Terminal')] class extends Component
         }
     }
 
+    public function updatedReturnCompensation(): void
+    {
+        $this->resetValidation('returnCredits');
+        unset($this->cartSubtotal, $this->cartTotal, $this->cartDiscountAmount);
+        if (! $this->editingSale) {
+            $this->paid_amount = $this->cartTotal;
+            $this->syncLegacyPaymentToFirstRowWhenOnlyOneRow();
+        }
+    }
+
     public function updatedPaidAmount(): void
     {
         $this->syncLegacyPaymentToFirstRow();
@@ -742,6 +755,7 @@ new #[Title('POS Terminal')] class extends Component
             'saleDate' => 'required|date',
             'cart' => 'array',
             'returnCredits' => 'array',
+            'returnCompensation' => 'required|in:bill_credit,adjust_due',
             'returnCredits.*.quantity' => 'required|integer|min:1',
             'returnCredits.*.return_price' => 'required|numeric|min:0',
             'returnCredits.*.sale_id' => 'required|integer|min:0',
@@ -758,6 +772,16 @@ new #[Title('POS Terminal')] class extends Component
         ];
 
         $this->validate($rules);
+
+        Customer::query()->lockForUpdate()->findOrFail($this->customer_id);
+        $linkedReturns = $this->editingSale
+            ? SaleReturn::query()->where(fn ($query) => $query->where('checkout_sale_id', $this->editingSale->id)->orWhere('notes', 'like', 'Return credited on checkout '.$this->editingSale->invoice_no.'.%'))->get()
+            : collect();
+        if ($this->editingSale && (int) $this->customer_id !== (int) $this->editingSale->customer_id
+            && ($linkedReturns->isNotEmpty() || $this->editingSale->returns()->exists() || app(SaleReturnService::class)->dueReductionFor($this->editingSale) > 0)) {
+            $this->addError('customer_id', __('This bill has customer returns or allocated credits. Remove those returns before changing its customer.'));
+            return null;
+        }
 
         if (count($this->cart) === 0 && count($this->returnCredits) === 0) {
             $this->addError('cart', __('Add at least one sale product or return item.'));
@@ -800,7 +824,7 @@ new #[Title('POS Terminal')] class extends Component
 
         foreach (collect($this->returnCredits)->groupBy('sale_id') as $saleId => $credits) {
             $originalSale = $this->originalSaleForReturnCredit((int) $saleId);
-            if ((float) $credits->sum('subtotal') > app(SaleReturnService::class)->availableRefund($originalSale)) {
+            if ($this->returnCompensation === 'bill_credit' && (float) $credits->sum('subtotal') > app(SaleReturnService::class)->availableRefund($originalSale, $linkedReturns->isNotEmpty() ? $linkedReturns->modelKeys() : [])) {
                 $this->addError('returnCredits', __('The return credit exceeds the remaining paid amount on the original invoice. Use invoice due reduction for unpaid returns.'));
                 return null;
             }
@@ -835,7 +859,23 @@ new #[Title('POS Terminal')] class extends Component
 
         $capturedPaidAmount = $this->capturedPaymentRowsTotal($paymentRows);
         $heldChequeAmount = $this->chequePaymentRowsTotal($paymentRows);
-        $dueAmount = max(0.00, $grandTotal - $capturedPaidAmount - $heldChequeAmount);
+        $existingReduction = $this->editingSale ? app(SaleReturnService::class)->dueReductionFor($this->editingSale, $this->returnCompensation === 'adjust_due' ? [] : $linkedReturns->modelKeys()) : 0.0;
+        $unpaidAmount = max(0, $grandTotal - $capturedPaidAmount - $heldChequeAmount);
+        $externalReduction = $this->editingSale ? app(SaleReturnService::class)->dueReductionFor($this->editingSale, $linkedReturns->isNotEmpty() ? $linkedReturns->modelKeys() : []) : 0.0;
+        $reallocateLinkedDue = $this->returnCompensation === 'adjust_due' && $existingReduction > $unpaidAmount && $externalReduction <= $unpaidAmount;
+        if ($existingReduction > $unpaidAmount && ! $reallocateLinkedDue) {
+            $this->addError('returnCredits', __('This bill has allocated return credits. Change those returns before reducing its unpaid amount further.'));
+            return null;
+        }
+        $dueAmount = max(0.00, $unpaidAmount - ($reallocateLinkedDue ? $externalReduction : $existingReduction));
+        $availableCustomerDue = (float) Customer::query()->findOrFail($this->customer_id)->due_balance
+            + (float) $linkedReturns->where('return_type', 'adjust_due')->sum('adjusted_amount')
+            - (float) ($this->editingSale?->due_amount ?? 0) + $dueAmount
+            - ($reallocateLinkedDue ? $existingReduction - $externalReduction : 0);
+        if ($this->returnCompensation === 'adjust_due' && $this->returnCreditsTotal > round(max(0, $availableCustomerDue), 2)) {
+            $this->addError('returnCredits', __('The return exceeds the customer total due. Use bill credit or process the refund on the Returns page.'));
+            return null;
+        }
 
         if ($dueAmount > 0 && Setting::get('pos_allow_due_sale', '1') === '0') {
             Flux::toast(variant: 'danger', text: __('Due sales disabled in system settings. Full payment required.'));
@@ -845,7 +885,7 @@ new #[Title('POS Terminal')] class extends Component
         $paymentStatus = 'due';
         if ($heldChequeAmount > 0) {
             $paymentStatus = $dueAmount > 0 ? 'partial' : 'cheque_pending';
-        } elseif ($capturedPaidAmount >= $grandTotal) {
+        } elseif ($dueAmount <= 0) {
             $paymentStatus = 'paid';
         } elseif ($capturedPaidAmount > 0) {
             $paymentStatus = 'partial';
@@ -856,7 +896,7 @@ new #[Title('POS Terminal')] class extends Component
         foreach ($this->cart as $item) {
             $totalCost += $item['quantity'] * $item['cost_price'];
         }
-        foreach ($this->returnCredits as $returnCredit) {
+        foreach ($this->returnCompensation === 'bill_credit' ? $this->returnCredits : [] as $returnCredit) {
             $totalCost -= (int) $returnCredit['quantity'] * (float) $returnCredit['unit_cost'];
         }
         $netProfit = $grandTotal - $totalCost;
@@ -867,6 +907,15 @@ new #[Title('POS Terminal')] class extends Component
         if ($this->editingSale) {
             $sale = $this->editingSale;
             $invoiceNo = $sale->invoice_no;
+            if ($reallocateLinkedDue) {
+                foreach ($linkedReturns->where('return_type', 'adjust_due') as $linkedReturn) {
+                    app(SaleReturnService::class)->releaseCheckoutDueAdjustment($linkedReturn, $sale);
+                }
+            }
+            foreach ($this->returnCompensation !== 'adjust_due' ? $linkedReturns->where('return_type', 'adjust_due') : [] as $linkedReturn) {
+                app(SaleReturnService::class)->releaseCheckoutDueAdjustment($linkedReturn, $sale);
+            }
+            $sale->refresh();
 
             // Revert original stock
             foreach ($sale->items as $oldItem) {
@@ -881,7 +930,7 @@ new #[Title('POS Terminal')] class extends Component
             }
 
             // Delete old SaleReturn records associated with this checkout
-            $oldReturns = SaleReturn::query()->where('notes', 'like', 'Return credited on checkout ' . $invoiceNo . '.%')->get();
+            $oldReturns = SaleReturn::query()->where('return_type', 'bill_credit')->where(fn ($query) => $query->where('checkout_sale_id', $sale->id)->orWhere('notes', 'like', 'Return credited on checkout ' . $invoiceNo . '.%'))->get();
             foreach ($oldReturns as $oldReturn) {
                 $oldReturn->items()->delete();
                 $oldReturn->delete();
@@ -942,7 +991,7 @@ new #[Title('POS Terminal')] class extends Component
             $product->decrement('stock_quantity', $item['quantity']);
         }
 
-        foreach ($this->returnCredits as $returnCredit) {
+        foreach ($this->returnCompensation === 'bill_credit' ? $this->returnCredits : [] as $returnCredit) {
             $quantity = (int) $returnCredit['quantity'];
             $subtotal = round((float) $returnCredit['subtotal'], 2);
 
@@ -957,8 +1006,6 @@ new #[Title('POS Terminal')] class extends Component
             $product = Product::query()->findOrFail($returnCredit['product_id']);
             $product->increment('stock_quantity', $quantity);
         }
-
-        $this->recordCheckoutReturnCredits($sale);
 
         // 3. Log cashier polymorphic payment
         foreach ($paymentRows as $paymentRow) {
@@ -986,6 +1033,8 @@ new #[Title('POS Terminal')] class extends Component
         if ($dueAmount > 0) {
             $customer->increment('due_balance', $dueAmount);
         }
+
+        $this->recordCheckoutReturnCredits($sale);
 
         ActivityLogger::log('pos_sale', "Completed Checkout {$invoiceNo}. Grand Total: Rs {$grandTotal}, Cashier: " . auth()->user()->name);
 
@@ -1027,7 +1076,7 @@ new #[Title('POS Terminal')] class extends Component
 
     public function resetCart(): void
     {
-        $this->reset('cart', 'returnCredits', 'returnSearch', 'discount', 'discount_type', 'tax', 'paid_amount', 'payment_method', 'payment_reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'notes', 'customerSearch', 'paymentRows');
+        $this->reset('cart', 'returnCredits', 'returnCompensation', 'returnSearch', 'discount', 'discount_type', 'tax', 'paid_amount', 'payment_method', 'payment_reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'notes', 'customerSearch', 'paymentRows');
         $this->saleDate = today()->toDateString();
         $this->paymentRows = [$this->blankPaymentRow()];
         $defaultCust = Customer::query()->where('name', 'Walk-in Customer')->first();
@@ -1119,7 +1168,7 @@ new #[Title('POS Terminal')] class extends Component
     #[Computed]
     public function cartSubtotal()
     {
-        return round(array_reduce($this->cart, fn($carry, $item) => $carry + $item['subtotal'], 0.00) - $this->returnCreditsTotal, 2);
+        return round(array_reduce($this->cart, fn($carry, $item) => $carry + $item['subtotal'], 0.00) - ($this->returnCompensation === 'bill_credit' ? $this->returnCreditsTotal : 0), 2);
     }
 
     #[Computed]
@@ -1141,6 +1190,20 @@ new #[Title('POS Terminal')] class extends Component
     public function cartTotal()
     {
         return round(max(0.00, ($this->cartSubtotal + (float) $this->tax) - $this->cartDiscountAmount), 2);
+    }
+
+    #[Computed]
+    public function returnCustomerDuePreview(): float
+    {
+        $oldReturns = $this->editingSale ? SaleReturn::query()->where('checkout_sale_id', $this->editingSale->id)->get() : collect();
+        $oldAdjustments = (float) $oldReturns->where('return_type', 'adjust_due')->sum('adjusted_amount');
+        $existingReduction = $this->editingSale ? app(SaleReturnService::class)->dueReductionFor($this->editingSale) : 0.0;
+        $externalReduction = $this->editingSale ? app(SaleReturnService::class)->dueReductionFor($this->editingSale, $oldReturns->isNotEmpty() ? $oldReturns->modelKeys() : []) : 0.0;
+        $reallocateLinkedDue = $existingReduction > $this->checkoutDuePreview && $externalReduction <= $this->checkoutDuePreview;
+        $newBillDue = max(0, $this->checkoutDuePreview - ($reallocateLinkedDue ? $externalReduction : $existingReduction));
+        return round(max(0, (float) ($this->selectedCustomer?->due_balance ?? 0) + $oldAdjustments
+            - (float) ($this->editingSale?->due_amount ?? 0) + $newBillDue
+            - ($reallocateLinkedDue ? $existingReduction - $externalReduction : 0) - $this->returnCreditsTotal), 2);
     }
 
     #[Computed]
@@ -1257,6 +1320,14 @@ new #[Title('POS Terminal')] class extends Component
         $returnPrice = max(0, (float) $this->returnCredits[$key]['return_price']);
 
         $this->returnCredits[$key]['subtotal'] = round($quantity * $returnPrice, 2);
+        if ($this->returnCompensation === 'adjust_due' && (int) $this->returnCredits[$key]['sale_id'] > 0) {
+            $saleItem = SaleItem::query()->where('sale_id', $this->returnCredits[$key]['sale_id'])->where('product_id', $this->returnCredits[$key]['product_id'])->first();
+            $available = $saleItem ? $this->availableReturnCreditItem($saleItem) : null;
+            if ($available && $returnPrice === (float) $available['refund_price']) {
+                $this->returnCredits[$key]['subtotal'] = app(SaleReturnService::class)->subtotalFor($available, $quantity);
+            }
+        }
+
         
         if ($syncPayment && ! $this->editingSale) {
             $this->paid_amount = $this->cartTotal;
@@ -1275,8 +1346,8 @@ new #[Title('POS Terminal')] class extends Component
 
         if ($this->editingSale) {
             $sale->setRelation('returns', $sale->returns->reject(
-                fn (SaleReturn $return): bool => $return->return_type === 'bill_credit'
-                    && $return->notes === 'Return credited on checkout '.$this->editingSale->invoice_no.'.'
+                fn (SaleReturn $return): bool => $return->checkout_sale_id === $this->editingSale->id
+                    || ($return->return_type === 'bill_credit' && $return->notes === 'Return credited on checkout '.$this->editingSale->invoice_no.'.')
             ));
         }
 
@@ -1295,14 +1366,41 @@ new #[Title('POS Terminal')] class extends Component
 
     private function recordCheckoutReturnCredits(Sale $checkoutSale): void
     {
-        foreach (collect($this->returnCredits)->groupBy('sale_id') as $originalSaleId => $returnCredits) {
+        $existingReturns = SaleReturn::query()->where('checkout_sale_id', $checkoutSale->id)->where('return_type', 'adjust_due')->get()->keyBy('sale_id');
+        $groups = collect($this->returnCredits)->groupBy('sale_id');
+        foreach ($existingReturns as $sourceId => $oldReturn) {
+            if ($this->returnCompensation !== 'adjust_due' || ! $groups->has($sourceId)) {
+                app(SaleReturnService::class)->revert($oldReturn);
+            }
+        }
+        $groups = $groups->sortBy(fn ($credits, $sourceId): float => (float) $credits->sum('subtotal') - (float) ($existingReturns->get($sourceId)?->adjusted_amount ?? 0));
+        foreach ($groups as $originalSaleId => $returnCredits) {
             // Skip creating SaleReturn record for legacy negative items missing an original sale
             if ((int) $originalSaleId === 0) {
                 continue;
             }
 
+            if ($this->returnCompensation === 'adjust_due') {
+                $items = [];
+                foreach ($returnCredits as $credit) {
+                    $items[$credit['product_id']] = ['quantity' => $credit['quantity'], 'refund_price' => $credit['return_price'], 'condition' => 'restock'];
+                }
+                $service = app(SaleReturnService::class);
+                $oldReturn = $existingReturns->get($originalSaleId);
+                $return = $oldReturn
+                    ? $service->update($oldReturn, $items, 'adjust_due', $oldReturn->notes, allowPriceReduction: true)
+                    : $service->process(Sale::query()->findOrFail($originalSaleId), $items, 'adjust_due',
+                        'Return deducted from customer due on checkout '.$checkoutSale->invoice_no.'.', allowPriceReduction: true);
+                if ((float) $return->refund_amount > 0) {
+                    throw \Illuminate\Validation\ValidationException::withMessages(['returnCredits' => __('Customer dues changed. Review the return deduction before saving.')]);
+                }
+                $return->update(['checkout_sale_id' => $checkoutSale->id, 'date' => $this->saleDate]);
+                continue;
+            }
+
             $return = SaleReturn::query()->create([
                 'sale_id' => (int) $originalSaleId,
+                'checkout_sale_id' => $checkoutSale->id,
                 'customer_id' => $checkoutSale->customer_id,
                 'invoice_no' => $this->nextReturnNumber(),
                 'date' => $this->saleDate,
@@ -1356,7 +1454,7 @@ new #[Title('POS Terminal')] class extends Component
     #[Computed]
     public function completedSale()
     {
-        return $this->completedSaleId ? Sale::query()->with(['customer', 'items.product', 'payments'])->findOrFail($this->completedSaleId) : null;
+        return $this->completedSaleId ? Sale::query()->with(['customer', 'items.product', 'payments'])->findOrFail($this->completedSaleId)->loadDueCredits() : null;
     }
 }; ?>
 
@@ -2287,7 +2385,7 @@ new #[Title('POS Terminal')] class extends Component
                         <div>
                             <h4 class="text-xs font-black uppercase tracking-wider text-rose-500">{{ __('Return / Bill Credit') }}</h4>
                             <p class="mt-1 text-xs font-semibold leading-relaxed text-rose-700">
-                                {{ __('Search products sold to the selected customer and subtract the returned value from this bill.') }}
+                                {{ __('Choose whether returned products reduce this bill or the customer total due.') }}
                             </p>
                         </div>
                         <div class="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-black text-rose-600 ring-1 ring-rose-100">
@@ -2301,6 +2399,14 @@ new #[Title('POS Terminal')] class extends Component
                     </p>
                     @else
                     <div class="mt-3">
+                        <flux:select wire:model.live="returnCompensation" :label="__('Apply return value to')">
+                            <option value="bill_credit">{{ __('Reduce this bill total') }}</option>
+                            <option value="adjust_due">{{ __('Deduct from customer total due') }}</option>
+                        </flux:select>
+                        @if ($returnCompensation === 'adjust_due')
+                            <p class="mt-2 text-xs font-semibold text-rose-700">{{ __('Customer total due') }}: Rs {{ number_format((float) ($this->selectedCustomer?->due_balance ?? 0), 2) }} · {{ __('Return deduction') }}: Rs {{ number_format($this->returnCreditsTotal, 2) }}</p>
+                            <p class="mt-1 text-xs font-semibold text-emerald-700">{{ __('Remaining customer due after this bill and return') }}: Rs {{ number_format($this->returnCustomerDuePreview, 2) }}</p>
+                        @endif
                         <flux:input wire:model.live.debounce.250ms="returnSearch" placeholder="Search previous bill, product, or SKU..." />
                     </div>
 

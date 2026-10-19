@@ -25,6 +25,15 @@ class Sale extends Model
         ];
     }
 
+    public function loadDueCredits(): static
+    {
+        $this->setRelation('dueCredits', SaleReturn::query()->where('return_type', 'adjust_due')
+            ->whereJsonContains('due_allocations->sale_ids', $this->id)
+            ->with(['sale', 'items.product', 'faultyItems'])->get());
+
+        return $this;
+    }
+
     public function customer(): BelongsTo
     {
         return $this->belongsTo(Customer::class);

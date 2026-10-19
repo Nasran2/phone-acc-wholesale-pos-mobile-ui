@@ -147,7 +147,7 @@ new #[Title('Customer Transactions')] class extends Component
     public function selectedSale(): ?Sale
     {
         return $this->selectedSaleId
-            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)
+            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)->loadDueCredits()
             : null;
     }
 

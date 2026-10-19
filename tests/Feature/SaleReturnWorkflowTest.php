@@ -185,15 +185,16 @@ test('unpaid items cannot be refunded in cash', function () {
         ->and((float) $customer->refresh()->due_balance)->toBe(500.0);
 });
 
-test('paid invoice cannot reduce unrelated customer dues', function () {
+test('paid invoice returns can reduce customer account dues', function () {
     [$customer, $product, $sale] = returnScenario();
     $customer->update(['due_balance' => 1000]);
 
-    expect(fn () => app(SaleReturnService::class)->process($sale, [$product->id => ['quantity' => 1]], 'adjust_due'))
-        ->toThrow(ValidationException::class);
+    $return = app(SaleReturnService::class)->process($sale, [$product->id => ['quantity' => 1]], 'adjust_due');
 
-    expect((float) $customer->refresh()->due_balance)->toBe(1000.0)
-        ->and(SaleReturn::query()->count())->toBe(0);
+    expect((float) $customer->refresh()->due_balance)->toBe(500.0)
+        ->and((float) $return->adjusted_amount)->toBe(500.0)
+        ->and((float) $return->refund_amount)->toBe(0.0)
+        ->and((float) $sale->refresh()->due_amount)->toBe(0.0);
 });
 
 test('cash refunds use persisted discounted invoice prices and appear in cash outflows', function () {

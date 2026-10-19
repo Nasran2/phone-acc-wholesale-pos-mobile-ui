@@ -309,7 +309,7 @@ new #[Title('Manage Customers')] class extends Component
     public function selectedSale()
     {
         return $this->selectedSaleId
-            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['items.product', 'payments', 'customer', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)
+            ? Sale::query()->where('customer_id', $this->selectedCustomerId)->with(['items.product', 'payments', 'customer', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])->findOrFail($this->selectedSaleId)->loadDueCredits()
             : null;
     }
 

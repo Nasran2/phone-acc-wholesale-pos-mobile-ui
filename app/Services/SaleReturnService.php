@@ -17,22 +17,19 @@ class SaleReturnService
     /**
      * @param  array<int|string, array{name?: string|null, sku?: string|null, quantity: int|float|string, refund_price?: int|float|string, condition?: string, max?: int|float|string, subtotal?: int|float|string}>  $returnItems
      */
-    public function process(Sale $sale, array $returnItems, string $returnType, ?string $notes = null): SaleReturn
+    public function process(Sale $sale, array $returnItems, string $returnType, ?string $notes = null, bool $allowPriceReduction = false): SaleReturn
     {
         $this->validateReturnInput($returnItems, $returnType, $notes);
 
-        return DB::transaction(function () use ($sale, $returnItems, $returnType, $notes): SaleReturn {
-            $sale = Sale::query()->lockForUpdate()->findOrFail($sale->id);
-            $customer = $sale->customer_id
-                ? Customer::query()->lockForUpdate()->findOrFail($sale->customer_id)
-                : null;
-            $sale->setRelation('customer', $customer);
+        return DB::transaction(function () use ($sale, $returnItems, $returnType, $notes, $allowPriceReduction): SaleReturn {
+            $sale = $this->lockSaleAndCustomer($sale->id);
+            $customer = $sale->customer;
             ksort($returnItems);
             foreach ($returnItems as &$item) {
                 $item['condition'] ??= $returnType === 'exchange' ? 'faulty' : 'restock';
             }
             unset($item);
-            $itemsToReturn = $this->normaliseItems($sale, $returnItems);
+            $itemsToReturn = $this->normaliseItems($sale, $returnItems, $allowPriceReduction);
             $refundTotal = round((float) collect($itemsToReturn)->sum('subtotal'), 2);
 
             if ($refundTotal <= 0) {
@@ -68,7 +65,7 @@ class SaleReturnService
             }
 
             if ($adjustedAmount > 0) {
-                $this->reduceDue($sale, $customer, $adjustedAmount);
+                $this->applyDueAdjustment($return, $sale, $customer, $adjustedAmount);
             }
 
             if ($refundAmount > 0) {
@@ -136,32 +133,38 @@ class SaleReturnService
     /**
      * @param  array<int|string, array{quantity: int|float|string, condition?: string}>  $returnItems
      */
-    public function update(SaleReturn $return, array $returnItems, string $returnType, ?string $notes = null): SaleReturn
+    public function update(SaleReturn $return, array $returnItems, string $returnType, ?string $notes = null, bool $allowPriceReduction = false): SaleReturn
     {
         $this->validateReturnInput($returnItems, $returnType, $notes);
 
-        return DB::transaction(function () use ($return, $returnItems, $returnType, $notes): SaleReturn {
-            $sale = Sale::query()->lockForUpdate()->findOrFail($return->sale_id);
-            $customer = $sale->customer_id
-                ? Customer::query()->lockForUpdate()->findOrFail($sale->customer_id)
-                : null;
+        return DB::transaction(function () use ($return, $returnItems, $returnType, $notes, $allowPriceReduction): SaleReturn {
+            $sale = $this->lockSaleAndCustomer($return->sale_id);
+            $customer = $sale->customer;
             $return = SaleReturn::query()->lockForUpdate()->findOrFail($return->id);
             $return->load('items');
             $return->setRelation('faultyItems', $return->faultyItems()->lockForUpdate()->get());
             $this->ensureEditable($return);
             $originalDue = (float) $sale->due_amount;
             $oldAdjustment = (float) $return->adjusted_amount;
-            $sale->due_amount = round($originalDue + $oldAdjustment, 2);
+            $sourceAdjustment = $return->due_allocations === null ? $oldAdjustment
+                : (float) collect($return->due_allocations['sales'] ?? [])->where('sale_id', $sale->id)->sum('amount');
+            $sale->due_amount = round($originalDue + $sourceAdjustment, 2);
+            if ($customer) {
+                $virtualCustomer = clone $customer;
+                $virtualCustomer->due_balance = round((float) $customer->due_balance + $oldAdjustment, 2);
+                $sale->setRelation('customer', $virtualCustomer);
+            }
             $sale->setRelation('returns', $sale->returns()->with('items')->whereKeyNot($return->id)->get());
             ksort($returnItems);
             foreach ($returnItems as $productId => &$input) {
                 $input['condition'] ??= $return->faultyItems->contains('product_id', $productId) ? 'faulty' : 'restock';
             }
             unset($input);
-            $items = $this->normaliseItems($sale, $returnItems);
+            $items = $this->normaliseItems($sale, $returnItems, $allowPriceReduction);
             foreach ($items as &$item) {
                 $previousItems = $return->items->where('product_id', $item['product_id']);
-                if ($item['quantity'] === (int) $previousItems->sum('quantity')) {
+                if ($item['quantity'] === (int) $previousItems->sum('quantity')
+                    && (! $allowPriceReduction || round((float) ($returnItems[$item['product_id']]['refund_price'] ?? $item['refund_price']), 2) === round((float) $previousItems->first()->refund_price, 2))) {
                     $item['refund_price'] = (float) $previousItems->first()->refund_price;
                     $item['subtotal'] = round((float) $previousItems->sum('subtotal'), 2);
                 }
@@ -202,14 +205,11 @@ class SaleReturnService
                 }
             }
 
-            $dueChange = round($oldAdjustment - $adjustment, 2);
-            $sale->due_amount = round($originalDue + $dueChange, 2);
-            if ($dueChange !== 0.0) {
-                $sale->payment_status = (float) $sale->due_amount <= 0 ? 'paid' : ((float) $sale->paid_amount > 0 ? 'partial' : 'due');
-                $sale->save();
-                if ($customer) {
-                    $customer->update(['due_balance' => round(max(0, (float) $customer->due_balance + $dueChange), 2)]);
-                }
+            $sale->due_amount = $originalDue;
+            $sale->setRelation('customer', $customer);
+            $replaceAllocation = round($oldAdjustment - $adjustment, 2) !== 0.0;
+            if ($replaceAllocation && $oldAdjustment > 0) {
+                $this->restoreDueAdjustment($return, $sale, $customer);
             }
 
             $return->payments()->delete();
@@ -217,6 +217,12 @@ class SaleReturnService
             $return->items()->delete();
             Expense::query()->where('reference', $return->invoice_no)->where('category', 'Product Return Replacement Cost')->delete();
             $return->update(['return_type' => $returnType, 'adjusted_amount' => $adjustment, 'refund_amount' => $refund, 'notes' => $notes]);
+            if ($replaceAllocation) {
+                $return->update(['due_allocations' => null]);
+                if ($adjustment > 0) {
+                    $this->applyDueAdjustment($return, $sale->refresh(), $customer?->refresh(), $adjustment);
+                }
+            }
 
             foreach ($items as $item) {
                 $return->items()->create([
@@ -251,7 +257,7 @@ class SaleReturnService
      * @param  array<int|string, array{quantity: int|float|string, refund_price?: int|float|string, condition?: string, subtotal?: int|float|string}>  $returnItems
      * @return array<int, array{product_id: int, quantity: int, refund_price: float, subtotal: float, unit_cost: float, condition: string}>
      */
-    private function normaliseItems(Sale $sale, array $returnItems): array
+    private function normaliseItems(Sale $sale, array $returnItems, bool $allowPriceReduction = false): array
     {
         $items = [];
         $availableItems = $this->availableItems($sale);
@@ -286,12 +292,17 @@ class SaleReturnService
             }
 
             $refundPrice = $availableItem['refund_price'];
+            $subtotal = $this->subtotalFor($availableItem, $quantity);
+            if ($allowPriceReduction && isset($item['refund_price']) && (float) $item['refund_price'] < $refundPrice) {
+                $refundPrice = round(max(0, (float) $item['refund_price']), 2);
+                $subtotal = round($quantity * $refundPrice, 2);
+            }
 
             $items[] = [
                 'product_id' => $productId,
                 'quantity' => $quantity,
                 'refund_price' => $refundPrice,
-                'subtotal' => $this->subtotalFor($availableItem, $quantity),
+                'subtotal' => $subtotal,
                 'unit_cost' => $availableItem['unit_cost'],
                 'condition' => $item['condition'] ?? 'restock',
             ];
@@ -352,14 +363,14 @@ class SaleReturnService
         return $items;
     }
 
-    public function availableRefund(Sale $sale): float
+    public function availableRefund(Sale $sale, array $excludedReturnIds = []): float
     {
         $sale->loadMissing(['items', 'returns']);
         $billCredits = abs((float) $sale->items->where('quantity', '<', 0)->sum('subtotal'));
         $previousRefunds = (float) $sale->returns->sum('refund_amount');
         $previousCredits = (float) $sale->returns->where('return_type', 'bill_credit')->sum('adjusted_amount');
 
-        return round(max(0, (float) $sale->paid_amount + $billCredits - $previousRefunds - $previousCredits), 2);
+        return round(max(0, (float) $sale->paid_amount + $billCredits + $this->dueReductionFor($sale, $excludedReturnIds, externalOnly: true) - $previousRefunds - $previousCredits), 2);
     }
 
     /**
@@ -386,15 +397,15 @@ class SaleReturnService
     private function amountsFor(Sale $sale, float $refundTotal, string $returnType): array
     {
         if ($returnType === 'adjust_due') {
-            if ((float) $sale->due_amount <= 0) {
+            $availableDue = $sale->customer ? (float) $sale->customer->due_balance : (float) $sale->due_amount;
+            if ($availableDue <= 0) {
                 throw ValidationException::withMessages([
-                    'returnType' => __('This invoice has no outstanding due to reduce.'),
+                    'returnType' => __('This customer has no outstanding due to reduce.'),
                 ]);
             }
+            $adjustedAmount = min($refundTotal, $availableDue);
 
-            $adjustedAmount = min($refundTotal, (float) $sale->due_amount);
-
-            return [$adjustedAmount, max(0.00, $refundTotal - $adjustedAmount)];
+            return [$adjustedAmount, round(max(0, $refundTotal - $adjustedAmount), 2)];
         }
 
         if ($returnType === 'cash_refund') {
@@ -433,25 +444,94 @@ class SaleReturnService
         }
     }
 
-    private function reduceDue(Sale $sale, ?Customer $customer, float $adjustedAmount): void
+    private function lockSaleAndCustomer(int $saleId): Sale
     {
+        $sale = Sale::query()->findOrFail($saleId);
+        $customer = $sale->customer_id ? Customer::query()->lockForUpdate()->findOrFail($sale->customer_id) : null;
+        $sale = Sale::query()->lockForUpdate()->findOrFail($saleId);
+        $sale->setRelation('customer', $customer);
+
+        return $sale;
+    }
+
+    private function setInvoiceDue(Sale $sale, float $due): void
+    {
+        $pendingCheque = $sale->payments()->where('payment_method', 'cheque')->where('cheque_status', 'pending')->exists();
         $sale->update([
-            'due_amount' => round(max(0, (float) $sale->due_amount - $adjustedAmount), 2),
+            'due_amount' => round(max(0, $due), 2),
+            'payment_status' => $due <= 0 ? ($pendingCheque ? 'cheque_pending' : 'paid')
+                : (((float) $sale->paid_amount > 0 || $pendingCheque) ? 'partial' : 'due'),
         ]);
+    }
 
-        if ((float) $sale->due_amount <= 0) {
-            $sale->update(['payment_status' => 'paid']);
-        } elseif ((float) $sale->paid_amount > 0) {
-            $sale->update(['payment_status' => 'partial']);
-        } else {
-            $sale->update(['payment_status' => 'due']);
+    private function applyDueAdjustment(SaleReturn $return, Sale $source, ?Customer $customer, float $amount): void
+    {
+        $invoices = $customer
+            ? Sale::query()->where('customer_id', $customer->id)->where('due_amount', '>', 0)->orderBy('id')->lockForUpdate()->get()
+            : collect([$source]);
+        $invoices = $invoices->sortBy(fn (Sale $sale): string => ($sale->id === $source->id ? '0' : '1').$sale->date->format('Ymd').str_pad((string) $sale->id, 20, '0', STR_PAD_LEFT));
+        $remaining = $amount;
+        $allocations = [];
+        foreach ($invoices as $invoice) {
+            $applied = round(min($remaining, (float) $invoice->due_amount), 2);
+            if ($applied <= 0) {
+                continue;
+            }
+            $this->setInvoiceDue($invoice, (float) $invoice->due_amount - $applied);
+            $allocations[] = ['sale_id' => $invoice->id, 'invoice_no' => $invoice->invoice_no, 'amount' => $applied];
+            $remaining = round($remaining - $applied, 2);
         }
-
         if ($customer) {
-            $customer->update([
-                'due_balance' => round(max(0, (float) $customer->due_balance - $adjustedAmount), 2),
-            ]);
+            $customer->update(['due_balance' => round(max(0, (float) $customer->due_balance - $amount), 2)]);
         }
+        $return->update(['due_allocations' => [
+            'sales' => $allocations, 'sale_ids' => array_column($allocations, 'sale_id'), 'account_amount' => $remaining,
+        ]]);
+    }
+
+    private function restoreDueAdjustment(SaleReturn $return, Sale $source, ?Customer $customer): void
+    {
+        $allocations = $return->due_allocations['sales'] ?? ($return->due_allocations === null
+            ? [['sale_id' => $source->id, 'amount' => (float) $return->adjusted_amount]] : []);
+        foreach (collect($allocations)->sortBy('sale_id') as $allocation) {
+            $invoice = Sale::query()->lockForUpdate()->find($allocation['sale_id']);
+            if (! $invoice || $invoice->customer_id !== $source->customer_id) {
+                throw ValidationException::withMessages(['returnItems' => __('An invoice credited by this return is missing or belongs to another customer.')]);
+            }
+            $this->setInvoiceDue($invoice, (float) $invoice->due_amount + (float) $allocation['amount']);
+        }
+        if ($customer) {
+            $customer->update(['due_balance' => round((float) $customer->due_balance + (float) $return->adjusted_amount, 2)]);
+        }
+    }
+
+    public function releaseCheckoutDueAdjustment(SaleReturn $return, Sale $checkout): void
+    {
+        DB::transaction(function () use ($return, $checkout): void {
+            $source = $this->lockSaleAndCustomer($return->sale_id);
+            $return = SaleReturn::query()->lockForUpdate()->findOrFail($return->id);
+            $this->ensureEditable($return);
+            if ($return->return_type !== 'adjust_due' || $return->checkout_sale_id !== $checkout->id) {
+                throw ValidationException::withMessages(['returnCredits' => __('This return does not belong to the bill being edited.')]);
+            }
+            $this->restoreDueAdjustment($return, $source, $source->customer);
+            $return->update(['adjusted_amount' => 0, 'due_allocations' => ['sales' => [], 'sale_ids' => [], 'account_amount' => 0]]);
+        });
+    }
+
+    /** @param array<int> $excludedReturnIds */
+    public function dueReductionFor(Sale $sale, array $excludedReturnIds = [], bool $externalOnly = false): float
+    {
+        return round((float) SaleReturn::query()->where('return_type', 'adjust_due')
+            ->whereNotIn('id', $excludedReturnIds)
+            ->when($externalOnly, fn ($query) => $query->where('sale_id', '!=', $sale->id))
+            ->where(function ($query) use ($sale): void {
+                $query->whereJsonContains('due_allocations->sale_ids', $sale->id)
+                    ->orWhere(fn ($query) => $query->whereNull('due_allocations')->where('sale_id', $sale->id));
+            })->get()->sum(function (SaleReturn $return) use ($sale): float {
+                return $return->due_allocations === null ? (float) $return->adjusted_amount
+                    : (float) collect($return->due_allocations['sales'] ?? [])->where('sale_id', $sale->id)->sum('amount');
+            }), 2);
     }
 
     /**
@@ -487,10 +567,8 @@ class SaleReturnService
     public function revert(SaleReturn $return): void
     {
         DB::transaction(function () use ($return): void {
-            $sale = Sale::query()->lockForUpdate()->findOrFail($return->sale_id);
-            $customer = $sale->customer_id
-                ? Customer::query()->lockForUpdate()->findOrFail($sale->customer_id)
-                : null;
+            $sale = $this->lockSaleAndCustomer($return->sale_id);
+            $customer = $sale->customer;
             $return = SaleReturn::query()->lockForUpdate()->findOrFail($return->id);
             $return->load('items.product');
             $return->setRelation('faultyItems', $return->faultyItems()->lockForUpdate()->get());
@@ -519,14 +597,7 @@ class SaleReturnService
             }
 
             if ((float) $return->adjusted_amount > 0) {
-                $sale->update([
-                    'due_amount' => round((float) $sale->due_amount + (float) $return->adjusted_amount, 2),
-                    'payment_status' => (float) $sale->paid_amount > 0 ? 'partial' : 'due',
-                ]);
-
-                if ($customer) {
-                    $customer->increment('due_balance', (float) $return->adjusted_amount);
-                }
+                $this->restoreDueAdjustment($return, $sale, $customer);
             }
 
             $return->payments()->delete();

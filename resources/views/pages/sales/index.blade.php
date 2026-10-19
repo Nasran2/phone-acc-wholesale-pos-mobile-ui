@@ -82,7 +82,7 @@ new #[Title('Sales Receipts')] class extends Component
         }
 
         // Set default return type if invoice had dues
-        if ($sale->due_amount > 0) {
+        if ((float) ($sale->customer?->due_balance ?? $sale->due_amount) > 0) {
             $this->returnType = 'adjust_due';
         } else {
             $this->returnType = 'cash_refund';
@@ -151,6 +151,10 @@ new #[Title('Sales Receipts')] class extends Component
         $invoiceNo = '';
 
         DB::transaction(function () use (&$invoiceNo): void {
+            $source = Sale::query()->findOrFail($this->viewingSaleId);
+            if ($source->customer_id) {
+                Customer::query()->lockForUpdate()->findOrFail($source->customer_id);
+            }
             $sale = Sale::query()
                 ->with(['customer', 'items', 'payments', 'returns.items', 'returns.payments', 'returns.faultyItems'])
                 ->lockForUpdate()
@@ -163,6 +167,19 @@ new #[Title('Sales Receipts')] class extends Component
                 ]);
             }
 
+            if (\App\Models\SaleReturn::query()->whereJsonContains('due_allocations->sale_ids', $sale->id)
+                ->where('sale_id', '!=', $sale->id)
+                ->where(fn ($query) => $query->whereNull('checkout_sale_id')->orWhere('checkout_sale_id', '!=', $sale->id))->exists()) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'returnItems' => __('This bill has customer return credits allocated to it. Edit or delete those returns before deleting the bill.'),
+                ]);
+            }
+            $returnsToReverse = \App\Models\SaleReturn::query()->where('return_type', '!=', 'bill_credit')
+                ->where(fn ($query) => $query->where('sale_id', $sale->id)->orWhere('checkout_sale_id', $sale->id))->get();
+            foreach ($returnsToReverse as $return) {
+                app(SaleReturnService::class)->revert($return);
+            }
+            $sale->refresh();
             $invoiceNo = $sale->invoice_no;
             $stockAdjustments = [];
 
@@ -172,24 +189,6 @@ new #[Title('Sales Receipts')] class extends Component
                 }
 
                 $stockAdjustments[$item->product_id] = ($stockAdjustments[$item->product_id] ?? 0) + (int) $item->quantity;
-            }
-
-            foreach ($sale->returns as $return) {
-                foreach ($return->items as $returnItem) {
-                    if (! $returnItem->product_id) {
-                        continue;
-                    }
-
-                    $returnQuantity = (int) $returnItem->quantity;
-                    $stockAdjustments[$returnItem->product_id] ??= 0;
-
-                    $wasFaulty = $return->faultyItems->contains('product_id', $returnItem->product_id);
-                    if ($return->return_type === 'exchange' && $wasFaulty) {
-                        $stockAdjustments[$returnItem->product_id] += $returnQuantity;
-                    } elseif ($return->return_type !== 'exchange' && ! $wasFaulty) {
-                        $stockAdjustments[$returnItem->product_id] -= $returnQuantity;
-                    }
-                }
             }
 
             foreach ($stockAdjustments as $productId => $quantity) {
@@ -219,6 +218,11 @@ new #[Title('Sales Receipts')] class extends Component
                 $return->delete();
             }
 
+            foreach (\App\Models\SaleReturn::query()->where('return_type', 'bill_credit')
+                ->where(fn ($query) => $query->where('checkout_sale_id', $sale->id)->orWhere('notes', 'like', 'Return credited on checkout '.$sale->invoice_no.'.%'))->get() as $linkedCredit) {
+                $linkedCredit->items()->delete();
+                $linkedCredit->delete();
+            }
             $sale->items()->delete();
             $sale->delete();
         });
@@ -365,7 +369,7 @@ new #[Title('Sales Receipts')] class extends Component
 
         return Sale::query()
             ->with(['customer', 'items.product', 'payments', 'returns.items.product', 'returns.faultyItems', 'returns.sale'])
-            ->findOrFail($this->viewingSaleId);
+            ->findOrFail($this->viewingSaleId)->loadDueCredits();
     }
 
     #[Computed]
@@ -957,8 +961,8 @@ new #[Title('Sales Receipts')] class extends Component
                 <flux:error name="returnType" />
                 <flux:select wire:model="returnType" :label="__('Return Compensation Mode')">
                     <option value="cash_refund">Cash Refund (Withdraw cash)</option>
-                    @if ((float) ($this->selectedSale?->due_amount ?? 0) > 0)
-                        <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format((float) $this->selectedSale->due_amount, 2) }})</option>
+                    @if ((float) ($this->selectedSale?->customer?->due_balance ?? $this->selectedSale?->due_amount ?? 0) > 0)
+                        <option value="adjust_due">{{ __('Deduct from customer total due') }} (Rs {{ number_format((float) ($this->selectedSale->customer?->due_balance ?? $this->selectedSale->due_amount), 2) }})</option>
                     @endif
                     <option value="exchange">Same Product Exchange (Record cost as expense)</option>
                 </flux:select>

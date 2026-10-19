@@ -14,6 +14,16 @@
         </p>
         <p>{{ __('Cash refunded') }}: <strong>Rs {{ number_format((float) $return->refund_amount, 2) }}</strong></p>
     </div>
+    @if ($return->due_allocations)
+        <div class="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
+            @foreach ($return->due_allocations['sales'] ?? [] as $allocation)
+                <p>{{ __('Due deducted from bill') }} {{ $allocation['invoice_no'] }}: Rs {{ number_format((float) $allocation['amount'], 2) }}</p>
+            @endforeach
+            @if (($return->due_allocations['account_amount'] ?? 0) > 0)
+                <p>{{ __('Customer account due deducted') }}: Rs {{ number_format((float) $return->due_allocations['account_amount'], 2) }}</p>
+            @endif
+        </div>
+    @endif
     @if ($return->return_type === 'exchange')
         <p class="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-300">{{ __('Replacement products issued; invoice due and payments unchanged.') }}</p>
     @endif

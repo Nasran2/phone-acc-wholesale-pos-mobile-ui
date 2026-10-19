@@ -60,7 +60,7 @@ new #[Title('POS Returns')] class extends Component
 
         $this->returnItems = app(SaleReturnService::class)->availableItems($sale);
 
-        $this->returnType = (float) $sale->due_amount > 0 ? 'adjust_due' : 'exchange';
+        $this->returnType = ((float) $sale->due_amount > 0 || (float) ($sale->customer?->due_balance ?? 0) > 0) ? 'adjust_due' : 'exchange';
         foreach ($this->returnItems as &$item) {
             $item['condition'] = $this->returnType === 'exchange' ? 'faulty' : 'restock';
         }
@@ -256,7 +256,13 @@ new #[Title('POS Returns')] class extends Component
             ->with(['customer', 'items.product', 'returns.items.product', 'returns.sale', 'returns.faultyItems'])
             ->find($this->selectedSaleId);
         if ($sale && $this->editingReturnId) {
-            $sale->due_amount = (float) $sale->due_amount + (float) ($sale->returns->firstWhere('id', $this->editingReturnId)?->adjusted_amount ?? 0);
+            $return = $sale->returns->firstWhere('id', $this->editingReturnId);
+            $sourceAdjustment = $return?->due_allocations === null ? (float) ($return?->adjusted_amount ?? 0)
+                : (float) collect($return->due_allocations['sales'] ?? [])->where('sale_id', $sale->id)->sum('amount');
+            $sale->due_amount = (float) $sale->due_amount + $sourceAdjustment;
+            if ($sale->customer) {
+                $sale->customer->due_balance = (float) $sale->customer->due_balance + (float) ($return?->adjusted_amount ?? 0);
+            }
         }
 
         return $sale;
@@ -410,8 +416,8 @@ new #[Title('POS Returns')] class extends Component
                 <form wire:submit="submitReturn" class="mt-4 flex flex-col gap-4">
                     <flux:select wire:model.live="returnType" :label="__('Return action')">
                         <option value="exchange">{{ __('Same product exchange') }}</option>
-                        @if ($this->selectedSale->due_amount > 0)
-                            <option value="adjust_due">{{ __('Reduce invoice due') }} (Rs {{ number_format((float) $this->selectedSale->due_amount, 2) }})</option>
+                        @if ((float) ($this->selectedSale->customer?->due_balance ?? $this->selectedSale->due_amount) > 0)
+                            <option value="adjust_due">{{ __('Deduct from customer total due') }} (Rs {{ number_format((float) ($this->selectedSale->customer?->due_balance ?? $this->selectedSale->due_amount), 2) }})</option>
                         @endif
                         <option value="cash_refund">{{ __('Cash refund') }}</option>
                     </flux:select>
@@ -425,6 +431,12 @@ new #[Title('POS Returns')] class extends Component
                             <span class="text-zinc-500">{{ __('Invoice due') }}</span>
                             <span class="font-bold text-rose-600">{{ __('Rs') }} {{ number_format((float) $this->selectedSale->due_amount, 2) }}</span>
                         </div>
+                        @if ($returnType === 'adjust_due')
+                            @php($dueReduction = min($this->returnTotal, (float) ($this->selectedSale->customer?->due_balance ?? $this->selectedSale->due_amount)))
+                            <p class="mt-3 text-xs font-semibold text-emerald-700">{{ __('Customer due reduction') }}: Rs {{ number_format($dueReduction, 2) }}</p>
+                            <p class="mt-1 text-xs text-zinc-500">{{ __('Remaining customer due') }}: Rs {{ number_format(max(0, (float) ($this->selectedSale->customer?->due_balance ?? $this->selectedSale->due_amount) - $dueReduction), 2) }}</p>
+                            <p class="mt-1 text-xs text-zinc-500">{{ __('Cash refund remainder') }}: Rs {{ number_format(max(0, $this->returnTotal - $dueReduction), 2) }}</p>
+                        @endif
                         @if ($this->selectedSale->customer)
                             <div class="mt-2 flex items-center justify-between text-xs">
                                 <span class="text-zinc-500">{{ __('Customer Total due') }}</span>
