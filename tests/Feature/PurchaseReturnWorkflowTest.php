@@ -12,6 +12,7 @@ use App\Services\AccountingLedgerService;
 use App\Services\ChequePaymentService;
 use App\Services\PurchaseReturnService;
 use App\Services\SaleReturnService;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
@@ -266,4 +267,93 @@ test('a full discounted return preview matches the saved total including roundin
         ->set('selectedPurchaseId', $purchase->id)->set('returnItems.'.$item->id.'.quantity', 3)
         ->set('returnType', 'cash_refund')->assertSee('Rs 100.00')->call('processReturn')->assertHasNoErrors();
     expect((float) PurchaseReturn::query()->sole()->refund_amount)->toBe(100.0);
+});
+
+test('products can be found across supplier invoices by name sku and barcode', function (string $search) {
+    [$supplier, $product, $purchase, $item] = purchaseReturnScenario();
+    $product->update(['name' => 'Searchable Watch', 'sku' => 'WATCH-123', 'barcode' => '987654321', 'is_active' => false]);
+    $otherPurchase = $purchase->replicate();
+    $otherPurchase->invoice_no = 'PUR-OTHER-SEARCH';
+    $otherPurchase->save();
+    $otherItem = $otherPurchase->items()->create($item->only(['product_id', 'quantity', 'cost_price', 'selling_price', 'subtotal']));
+    $wrongSupplier = Supplier::query()->create(['name' => 'Other supplier']);
+    $wrongPurchase = $purchase->replicate();
+    $wrongPurchase->fill(['supplier_id' => $wrongSupplier->id, 'invoice_no' => 'PUR-WRONG-SUPPLIER'])->save();
+    $wrongPurchase->items()->create($item->only(['product_id', 'quantity', 'cost_price', 'selling_price', 'subtotal']));
+
+    $component = Livewire::test('pages::purchases.returns')->set('source', 'purchase')
+        ->set('selectedSupplierId', $supplier->id)->set('purchaseProductSearch', $search)
+        ->assertSee($purchase->invoice_no)->assertSee($otherPurchase->invoice_no);
+
+    expect($component->instance()->purchaseProductResults->pluck('id')->all())->toBe([$otherItem->id, $item->id]);
+    $component->call('selectPurchaseProduct', $otherItem->id)
+        ->assertSet('selectedPurchaseId', $otherPurchase->id)
+        ->assertSet('purchaseProductSearch', '')
+        ->assertSet('returnItemSearch', 'WATCH-123')
+        ->assertSeeHtml('purchase-return-line-'.$otherItem->id);
+})->with(['Searchable', 'WATCH-123', '987654321']);
+
+test('product search is bounded and requires a selected supplier and two characters', function () {
+    [$supplier, $product, $purchase, $item] = purchaseReturnScenario();
+    foreach (range(1, 20) as $index) {
+        $purchase->items()->create($item->only(['product_id', 'quantity', 'cost_price', 'selling_price', 'subtotal']));
+    }
+    $component = Livewire::test('pages::purchases.returns')->set('source', 'purchase')->set('purchaseProductSearch', 'Returned');
+    expect($component->instance()->purchaseProductResults)->toHaveCount(0);
+    $component->set('selectedSupplierId', $supplier->id)->set('purchaseProductSearch', 'R');
+    expect($component->instance()->purchaseProductResults)->toHaveCount(0);
+    $component->set('purchaseProductSearch', '  Returned  ');
+    expect($component->instance()->purchaseProductResults)->toHaveCount(15);
+    $component->set('purchaseProductSearch', 'no-such-product')->assertSee('No purchased products match your search for this supplier.');
+});
+
+test('a product result from another supplier cannot select its invoice', function () {
+    [$supplier, $product, $purchase, $item] = purchaseReturnScenario();
+    $otherSupplier = Supplier::query()->create(['name' => 'Other supplier']);
+    $component = Livewire::test('pages::purchases.returns')->set('source', 'purchase')
+        ->set('selectedSupplierId', $otherSupplier->id);
+    expect(fn () => $component->call('selectPurchaseProduct', $item->id))->toThrow(ModelNotFoundException::class);
+});
+
+test('large invoices render twenty lines at a time and keep quantities across pages and searches', function () {
+    [$supplier, $product, $purchase, $item] = purchaseReturnScenario(0);
+    $products = Product::factory()->count(44)->create(['cost_price' => 100, 'stock_quantity' => 10]);
+    $items = $products->map(fn (Product $product) => $purchase->items()->create([
+        'product_id' => $product->id, 'quantity' => 10, 'cost_price' => 100, 'selling_price' => 150, 'subtotal' => 1000,
+    ]));
+    $purchase->update(['total_amount' => 45000, 'grand_total' => 45000, 'paid_amount' => 45000]);
+    $lastItem = $items->last();
+    $products->last()->update(['barcode' => '1234567890123']);
+    $component = Livewire::test('pages::purchases.returns')->set('source', 'purchase')
+        ->set('selectedSupplierId', $supplier->id)->set('selectedPurchaseId', $purchase->id)
+        ->assertSeeHtml('purchase-return-line-'.$item->id)
+        ->assertDontSeeHtml('purchase-return-line-'.$lastItem->id);
+    expect($component->instance()->visiblePurchaseLines->count())->toBe(20)
+        ->and($component->get('returnItems'))->toHaveCount(20);
+
+    $component->set('returnItems.'.$item->id.'.quantity', 1)
+        ->call('setPage', 3, 'returnItemsPage')->assertSeeHtml('purchase-return-line-'.$lastItem->id)
+        ->set('returnItems.'.$lastItem->id.'.quantity', 2)
+        ->set('returnItemSearch', $products->last()->barcode)
+        ->assertSet('paginators.returnItemsPage', 1)->assertSet('returnItems.'.$item->id.'.quantity', 1)
+        ->assertSeeHtml('purchase-return-line-'.$lastItem->id)
+        ->assertDontSeeHtml('purchase-return-line-'.$item->id);
+    expect($component->instance()->summary['returned'])->toBe(300)
+        ->and($component->instance()->visiblePurchaseLines->total())->toBe(1);
+    $component->set('returnItemSearch', 'missing-invoice-product')->assertSee('No invoice products match your search.')
+        ->set('returnItemSearch', '')->assertSeeHtml('purchase-return-line-'.$item->id)
+        ->set('returnType', 'cash_refund')->call('processReturn')->assertHasNoErrors();
+    expect((float) PurchaseReturn::query()->sole()->refund_amount)->toBe(300.0)
+        ->and($product->refresh()->stock_quantity)->toBe(9)
+        ->and($products->last()->refresh()->stock_quantity)->toBe(8);
+});
+
+test('selecting products from the current invoice keeps entered quantities and changing supplier clears search', function () {
+    [$supplier, $product, $purchase, $item] = purchaseReturnScenario();
+    Livewire::test('pages::purchases.returns')->set('source', 'purchase')->set('selectedSupplierId', $supplier->id)
+        ->set('selectedPurchaseId', $purchase->id)->set('returnItems.'.$item->id.'.quantity', 2)
+        ->call('selectPurchaseProduct', $item->id)->assertSet('returnItems.'.$item->id.'.quantity', 2)
+        ->set('purchaseProductSearch', 'Returned')->set('selectedSupplierId', Supplier::query()->create(['name' => 'Other supplier'])->id)
+        ->assertSet('selectedPurchaseId', null)->assertSet('returnItems', [])
+        ->assertSet('returnItemSearch', '')->assertSet('purchaseProductSearch', '');
 });

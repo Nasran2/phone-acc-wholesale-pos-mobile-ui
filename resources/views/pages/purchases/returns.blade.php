@@ -3,12 +3,15 @@
 use App\Models\FaultyItem;
 use App\Models\Product;
 use App\Models\Purchase;
+use App\Models\PurchaseItem;
 use App\Models\PurchaseReturn;
 use App\Models\PurchaseReturnItem;
 use App\Models\Supplier;
 use App\Services\PurchaseReturnService;
 use Flux\Flux;
 use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Str;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
@@ -27,6 +30,8 @@ new #[Title('Purchase Returns')] class extends Component
     public array $returnItems = [];
     public array $replacementItems = [];
     public string $productSearch = '';
+    public string $purchaseProductSearch = '';
+    public string $returnItemSearch = '';
     public string $returnType = 'adjust_due';
     public string $balanceAction = 'adjust_due';
     public int|float|string $paidAmount = 0;
@@ -56,7 +61,7 @@ new #[Title('Purchase Returns')] class extends Component
     #[Computed]
     public function suppliers(): Collection
     {
-        return Supplier::query()->orderBy('name')->get();
+        return Supplier::query()->orderBy('name')->get(['id', 'name']);
     }
 
     #[Computed]
@@ -68,13 +73,74 @@ new #[Title('Purchase Returns')] class extends Component
     #[Computed]
     public function purchases(): Collection
     {
-        return Purchase::query()->where('supplier_id', $this->selectedSupplierId)->latest('date')->latest('id')->get();
+        return Purchase::query()->where('supplier_id', $this->selectedSupplierId)->latest('date')->latest('id')->get(['id', 'invoice_no', 'date']);
     }
 
     #[Computed]
     public function selectedPurchase(): ?Purchase
     {
-        return $this->selectedPurchaseId ? Purchase::query()->with('items.product')->where('supplier_id', $this->selectedSupplierId)->find($this->selectedPurchaseId) : null;
+        return $this->selectedPurchaseId ? Purchase::query()->with('items.product:id,name,sku,barcode,stock_quantity')->where('supplier_id', $this->selectedSupplierId)->find($this->selectedPurchaseId) : null;
+    }
+
+    #[Computed]
+    public function purchaseProductResults(): Collection
+    {
+        $search = trim($this->purchaseProductSearch);
+        if ($this->source !== 'purchase' || ! $this->selectedSupplierId || mb_strlen($search) < 2) {
+            return collect();
+        }
+
+        return PurchaseItem::query()
+            ->with(['product:id,name,sku,barcode', 'purchase:id,invoice_no,date'])
+            ->whereHas('purchase', fn (Builder $query): Builder => $query->where('supplier_id', $this->selectedSupplierId))
+            ->whereHas('product', function (Builder $query) use ($search): void {
+                $query->where(function (Builder $query) use ($search): void {
+                    $query->where('name', 'like', '%'.$search.'%')
+                        ->orWhere('sku', 'like', '%'.$search.'%')
+                        ->orWhere('barcode', 'like', '%'.$search.'%');
+                });
+            })
+            ->latest('id')->limit(15)->get(['id', 'purchase_id', 'product_id', 'quantity']);
+    }
+
+    public function selectPurchaseProduct(int $purchaseItemId): void
+    {
+        abort_unless(auth()->user()?->hasPermission('add_purchase'), 403);
+        $item = PurchaseItem::query()->with('product:id,name,sku')
+            ->whereHas('purchase', fn (Builder $query): Builder => $query->where('supplier_id', $this->selectedSupplierId))
+            ->whereHas('product')->findOrFail($purchaseItemId);
+
+        if ($this->selectedPurchaseId !== $item->purchase_id) {
+            $this->selectedPurchaseId = $item->purchase_id;
+            $this->updatedSelectedPurchaseId();
+        }
+        $this->returnItemSearch = $item->product->sku;
+        $this->purchaseProductSearch = '';
+        $this->resetPage(pageName: 'returnItemsPage');
+    }
+
+    #[Computed]
+    public function visiblePurchaseLines(): LengthAwarePaginator
+    {
+        $search = mb_strtolower(trim($this->returnItemSearch));
+        $items = $this->purchaseLines->filter(function (PurchaseItem $item) use ($search): bool {
+            return $search === '' || collect([$item->product?->name, $item->product?->sku, $item->product?->barcode])
+                ->contains(fn (?string $value): bool => str_contains(mb_strtolower($value ?? ''), $search));
+        })->values();
+        $page = $this->getPage('returnItemsPage');
+        $visibleItems = $items->forPage($page, 20)->values();
+        foreach ($visibleItems as $item) {
+            $this->returnItems[$item->id] ??= ['quantity' => 0, 'refund_price' => round($item->return_value_cents / $item->quantity / 100, 2)];
+        }
+
+        return new LengthAwarePaginator($visibleItems, $items->count(), 20, $page, [
+            'path' => request()->url(), 'pageName' => 'returnItemsPage',
+        ]);
+    }
+
+    public function updatedReturnItemSearch(): void
+    {
+        $this->resetPage(pageName: 'returnItemsPage');
     }
 
     #[Computed]
@@ -109,13 +175,15 @@ new #[Title('Purchase Returns')] class extends Component
 
     public function updatedSource(): void
     {
-        $this->reset('selectedFaultyItems', 'selectedPurchaseId', 'returnItems', 'replacementItems', 'paidAmount', 'deductionAmount');
+        $this->reset('selectedFaultyItems', 'selectedPurchaseId', 'returnItems', 'replacementItems', 'paidAmount', 'deductionAmount', 'purchaseProductSearch', 'returnItemSearch');
+        $this->resetPage(pageName: 'returnItemsPage');
         $this->resetValidation();
     }
 
     public function updatedSelectedSupplierId(): void
     {
-        $this->reset('paidAmount', 'deductionAmount');
+        $this->reset('paidAmount', 'deductionAmount', 'purchaseProductSearch', 'returnItemSearch');
+        $this->resetPage(pageName: 'returnItemsPage');
         if ($this->source === 'purchase') {
             $this->reset('selectedPurchaseId', 'returnItems', 'replacementItems');
         }
@@ -124,12 +192,9 @@ new #[Title('Purchase Returns')] class extends Component
 
     public function updatedSelectedPurchaseId(): void
     {
-        unset($this->selectedPurchase, $this->purchaseLines);
-        $this->reset('returnItems', 'replacementItems', 'paidAmount', 'deductionAmount');
-        foreach ($this->purchaseLines as $item) {
-            $price = round($item->return_value_cents / $item->quantity / 100, 2);
-            $this->returnItems[$item->id] = ['quantity' => 0, 'refund_price' => $price];
-        }
+        unset($this->selectedPurchase, $this->purchaseLines, $this->visiblePurchaseLines);
+        $this->reset('returnItems', 'replacementItems', 'paidAmount', 'deductionAmount', 'returnItemSearch', 'purchaseProductSearch');
+        $this->resetPage(pageName: 'returnItemsPage');
     }
 
     public function updatedSelectedFaultyItems(): void
@@ -256,11 +321,12 @@ new #[Title('Purchase Returns')] class extends Component
             'deduction' => $this->deductionAmount, 'paid_amount' => $this->paidAmount,
             'notes' => $this->notes, 'operation_token' => $this->operationToken,
         ]);
-        $this->reset('selectedFaultyItems', 'selectedSupplierId', 'selectedPurchaseId', 'returnItems', 'replacementItems', 'paidAmount', 'deductionAmount', 'notes', 'productSearch');
+        $this->reset('selectedFaultyItems', 'selectedSupplierId', 'selectedPurchaseId', 'returnItems', 'replacementItems', 'paidAmount', 'deductionAmount', 'notes', 'productSearch', 'purchaseProductSearch', 'returnItemSearch');
         $this->operationToken = (string) Str::uuid();
         $this->lastReturnNumber = $return->invoice_no;
         unset($this->pendingFaultyItems, $this->selectedSupplier, $this->summary, $this->purchaseLines, $this->selectedPurchase);
         $this->resetPage();
+        $this->resetPage(pageName: 'returnItemsPage');
         Flux::toast(variant: 'success', text: __('Purchase return saved: :number', ['number' => $return->invoice_no]));
     }
 
@@ -332,14 +398,29 @@ new #[Title('Purchase Returns')] class extends Component
                     <div class="rounded-xl bg-zinc-50 p-3 text-sm dark:bg-zinc-800">{{ __('Current amount we owe supplier:') }} <strong>Rs {{ number_format((float) $this->selectedSupplier->due_balance, 2) }}</strong></div>
                 @endif
                 @if ($source === 'purchase')
+                    <flux:input wire:model.live.debounce.300ms="purchaseProductSearch" label="{{ __('Search all purchased products') }}" placeholder="{{ __('Product name, SKU or barcode (at least 2 characters)') }}" description="{{ __('Search across all invoices from the selected supplier, then choose a product to open its invoice.') }}" :disabled="! $selectedSupplierId" />
+                    @if (mb_strlen(trim($purchaseProductSearch)) >= 2 && $selectedSupplierId)
+                        <div class="divide-y divide-zinc-200 rounded-xl border border-zinc-200 dark:divide-zinc-700 dark:border-zinc-700">
+                            @forelse ($this->purchaseProductResults as $result)
+                                <button type="button" wire:click="selectPurchaseProduct({{ $result->id }})" wire:loading.attr="disabled" class="flex w-full flex-wrap items-center justify-between gap-2 p-3 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800" wire:key="purchase-product-result-{{ $result->id }}">
+                                    <span><strong>{{ $result->product->name }}</strong><span class="block text-xs text-zinc-500">{{ $result->product->sku }}</span></span>
+                                    <span class="text-zinc-500">{{ $result->purchase->invoice_no }} · {{ $result->purchase->date->format('d M Y') }}</span>
+                                </button>
+                            @empty
+                                <p class="p-3 text-sm text-zinc-500">{{ __('No purchased products match your search for this supplier.') }}</p>
+                            @endforelse
+                        </div>
+                    @endif
                     <flux:select wire:model.live="selectedPurchaseId" label="{{ __('Purchase invoice') }}" placeholder="{{ __('Choose invoice') }}" :disabled="! $selectedSupplierId">
                         @foreach ($this->purchases as $purchase)
                             <option value="{{ $purchase->id }}" wire:key="return-purchase-{{ $purchase->id }}">{{ $purchase->invoice_no }} · {{ $purchase->date->format('d M Y') }}</option>
                         @endforeach
                     </flux:select>
+                    <p wire:loading wire:target="selectedPurchaseId,selectPurchaseProduct" role="status" class="text-sm text-zinc-500">{{ __('Loading invoice products…') }}</p>
                     @if ($this->selectedPurchase)
+                        <flux:input wire:model.live.debounce.300ms="returnItemSearch" label="{{ __('Search items in this invoice') }}" placeholder="{{ __('Product name, SKU or barcode') }}" description="{{ __('Entered quantities are kept when searching or changing pages. Save this return before opening another invoice.') }}" />
                         <flux:text size="sm">{{ __('Enter quantities for the items you are returning. Prices include the original invoice discount and tax; you may lower the agreed return price. Final totals include invoice rounding.') }}</flux:text>
-                        @foreach ($this->purchaseLines as $item)
+                        @forelse ($this->visiblePurchaseLines as $item)
                             <div class="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700" wire:key="purchase-return-line-{{ $item->id }}">
                                 <div class="mb-3 flex flex-wrap justify-between gap-2">
                                     <div><strong>{{ $item->product?->name ?? __('Unavailable product') }}</strong><p class="text-xs text-zinc-500">{{ $item->product?->sku }}</p></div>
@@ -350,7 +431,10 @@ new #[Title('Purchase Returns')] class extends Component
                                     <flux:input wire:model.live="returnItems.{{ $item->id }}.refund_price" type="number" min="0.01" step="0.01" label="{{ __('Agreed value per item (Rs)') }}" />
                                 </div>
                             </div>
-                        @endforeach
+                        @empty
+                            <p class="text-sm text-zinc-500">{{ __('No invoice products match your search.') }}</p>
+                        @endforelse
+                        {{ $this->visiblePurchaseLines->links() }}
                     @endif
                 @else
                     <flux:text size="sm">{{ __('Faulty items do not have a recorded supplier. Check that the chosen supplier accepts these items. You can return part of a faulty batch.') }}</flux:text>
