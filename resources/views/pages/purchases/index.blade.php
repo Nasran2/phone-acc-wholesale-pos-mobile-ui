@@ -117,10 +117,13 @@ new #[Title('Wholesale Purchase Logs')] class extends Component
             <h1 class="font-display text-2xl font-bold tracking-tight text-zinc-950">{{ __('Purchase Invoices') }}</h1>
             <p class="text-sm text-zinc-500">{{ __('Auditing incoming shop accessories restocks, supplier accounts payable balances, and receipt histories.') }}</p>
         </div>
+        <div class="flex flex-wrap gap-2">
+        <flux:button href="{{ route('purchases.returns') }}" wire:navigate>{{ __('Purchase returns') }}</flux:button>
         <flux:button href="{{ route('purchases.create') }}" wire:navigate variant="primary" class="w-full sm:w-auto">
             <flux:icon.plus class="size-4 mr-1" />
             {{ __('New Purchase Order') }}
         </flux:button>
+        </div>
     </div>
 
     <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -312,6 +315,7 @@ new #[Title('Wholesale Purchase Logs')] class extends Component
                     </div>
 
                     <!-- Items purchased listing -->
+                    <flux:button href="{{ route('purchases.returns', ['purchase_id' => $this->selectedPurchase->id]) }}" wire:navigate>{{ __('Return items from this invoice') }}</flux:button>
                     <div class="flex flex-col gap-2">
                         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1">{{ __('Wholesale Products Restocked') }}</h4>
                         
@@ -355,6 +359,9 @@ new #[Title('Wholesale Purchase Logs')] class extends Component
                     </div>
 
                     <!-- Outward payments list -->
+                    @if ((float) $this->selectedPurchase->return_credit_amount > 0)
+                        <p class="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{{ __('Settled using return credit:') }} Rs {{ number_format((float) $this->selectedPurchase->return_credit_amount, 2) }}</p>
+                    @endif
                     <div class="border-t border-zinc-100 pt-4 flex flex-col gap-3">
                         <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{{ __('Outward Payments Remitted') }}</h4>
                         

@@ -8,7 +8,7 @@
             <flux:button size="sm" href="{{ route('pos.returns', ['edit_return' => $return->id]) }}" wire:navigate>{{ __('Edit / Delete on Bill') }}</flux:button>
         @endif
         <p class="text-xs text-zinc-500">{{ __('Change or remove the return credit on its checkout bill, then save the bill.') }}</p>
-    @elseif ($return->faultyItems->contains('status', 'returned'))
+    @elseif ($return->hasSupplierReturns())
         <p class="text-xs text-zinc-500">{{ __('Already returned to supplier; changes unavailable.') }}</p>
     @else
         @if ($inline)

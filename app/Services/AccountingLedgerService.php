@@ -6,6 +6,7 @@ use App\Models\Customer;
 use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\Purchase;
+use App\Models\PurchaseReturn;
 use App\Models\Sale;
 use App\Models\SaleReturn;
 use App\Models\Supplier;
@@ -63,7 +64,7 @@ class AccountingLedgerService
             ->with('paymentable')
             ->whereDate('date', '>=', $startDate)
             ->whereDate('date', '<=', $endDate)
-            ->whereHasMorph('paymentable', [Customer::class, Sale::class])
+            ->whereHasMorph('paymentable', [Customer::class, Sale::class, PurchaseReturn::class])
             ->where(function ($query): void {
                 $query->where('payment_method', '!=', 'cheque')
                     ->orWhere('cheque_status', 'passed');
@@ -163,7 +164,8 @@ class AccountingLedgerService
                 $salesReceipts = (float) $dayTransactions->where('account', 'Sales Revenue')->sum('debit');
                 $dueCollections = (float) $dayTransactions->where('account', 'Accounts Receivable')->sum('debit');
                 $purchasePayments = (float) $dayTransactions->where('account', 'Purchase Payments')->sum('credit')
-                    + (float) $dayTransactions->where('account', 'Accounts Payable')->sum('credit');
+                    + (float) $dayTransactions->where('account', 'Accounts Payable')->sum('credit')
+                    - (float) $dayTransactions->where('account', 'Purchase Returns')->sum('debit');
                 $expenses = (float) $dayTransactions->where('account', 'Operating Expenses')->sum('credit')
                     + (float) $dayTransactions->where('account', 'Sales Returns')->sum('credit');
 
@@ -256,6 +258,7 @@ class AccountingLedgerService
             $paymentable instanceof Supplier => 'Accounts Payable',
             $paymentable instanceof Purchase => 'Purchase Payments',
             $paymentable instanceof SaleReturn => 'Sales Returns',
+            $paymentable instanceof PurchaseReturn => 'Purchase Returns',
             default => 'Payments',
         };
 

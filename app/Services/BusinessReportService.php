@@ -7,6 +7,7 @@ use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Purchase;
+use App\Models\PurchaseReturn;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\Setting;
@@ -433,7 +434,7 @@ class BusinessReportService
             ->with('paymentable')
             ->whereDate('date', '>=', $startDate)
             ->whereDate('date', '<=', $endDate)
-            ->whereHasMorph('paymentable', [Customer::class, Sale::class])
+            ->whereHasMorph('paymentable', [Customer::class, Sale::class, PurchaseReturn::class])
             ->where(function ($query): void {
                 $query->where('payment_method', '!=', 'cheque')
                     ->orWhere('cheque_status', 'passed');

@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 
-#[Fillable(['supplier_id', 'invoice_no', 'date', 'total_amount', 'discount', 'tax', 'grand_total', 'paid_amount', 'due_amount', 'payment_status', 'notes'])]
+#[Fillable(['supplier_id', 'invoice_no', 'date', 'total_amount', 'discount', 'tax', 'grand_total', 'paid_amount', 'return_credit_amount', 'due_amount', 'payment_status', 'notes'])]
 class Purchase extends Model
 {
     protected function casts(): array
@@ -20,6 +20,7 @@ class Purchase extends Model
             'tax' => 'decimal:2',
             'grand_total' => 'decimal:2',
             'paid_amount' => 'decimal:2',
+            'return_credit_amount' => 'decimal:2',
             'due_amount' => 'decimal:2',
         ];
     }
@@ -37,5 +38,12 @@ class Purchase extends Model
     public function payments(): MorphMany
     {
         return $this->morphMany(Payment::class, 'paymentable');
+    }
+
+    public function isLinkedToReturn(): bool
+    {
+        return PurchaseReturn::query()->where('purchase_id', $this->id)
+            ->orWhere('replacement_purchase_id', $this->id)->exists()
+            || PurchaseReturn::dueReductionFor($this->id) > 0;
     }
 }

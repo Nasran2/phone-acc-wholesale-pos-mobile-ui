@@ -2,6 +2,7 @@
 
 use App\Models\Payment;
 use App\Models\Purchase;
+use App\Models\PurchaseReturn;
 use App\Models\Supplier;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
@@ -180,8 +181,26 @@ new #[Title('Supplier Transactions')] class extends Component
                 'raw_date' => $payment->created_at,
             ]);
 
+        $returns = PurchaseReturn::query()->where('supplier_id', $this->selectedSupplierId)
+            ->with('replacementPurchase')->get()->map(fn (PurchaseReturn $return): array => [
+                'type' => 'purchase_return', 'label' => __('Purchase return'), 'date' => $return->date,
+                'invoice_no' => $return->invoice_no, 'invoice_id' => null,
+                'description' => __('Cash received: Rs :cash · Old due reduced: Rs :due · Exchange credit: Rs :credit', [
+                    'cash' => number_format((float) $return->refund_amount, 2),
+                    'due' => number_format((float) $return->adjusted_amount, 2),
+                    'credit' => number_format((float) $return->replacementPurchase?->return_credit_amount, 2),
+                ]),
+                'payment_method' => (float) $return->refund_amount > 0 ? 'cash' : 'return_credit',
+                'cheque_status' => null, 'status' => 'paid', 'credit' => 0,
+                'debit' => (float) $return->adjusted_amount + (float) $return->replacementPurchase?->return_credit_amount,
+                'pending_amount' => $return->replacementPurchase?->due_amount,
+                'reference' => null, 'cheque_no' => null, 'cheque_date' => null,
+                'raw_date' => $return->created_at,
+            ]);
+
         return $purchasePayments
             ->concat($accountPayments)
+            ->concat($returns)
             ->filter(fn (array $row): bool => $this->matchesFilters($row))
             ->sortByDesc('raw_date')
             ->values();
@@ -391,6 +410,7 @@ new #[Title('Supplier Transactions')] class extends Component
                     <option value="all">{{ __('All transaction types') }}</option>
                     <option value="payment">{{ __('Invoice payments') }}</option>
                     <option value="account_payment">{{ __('Account payments') }}</option>
+                    <option value="purchase_return">{{ __('Purchase returns') }}</option>
                 </select>
                 <select wire:model.live="paymentMethod" class="rounded-2xl border border-zinc-200 px-3 py-2 text-sm font-semibold outline-none">
                     <option value="all">{{ __('All payment methods') }}</option>

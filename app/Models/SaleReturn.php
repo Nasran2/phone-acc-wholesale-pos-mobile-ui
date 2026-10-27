@@ -46,6 +46,12 @@ class SaleReturn extends Model
         return $this->hasMany(FaultyItem::class, 'source_sale_return_id');
     }
 
+    public function hasSupplierReturns(): bool
+    {
+        return $this->faultyItems->contains('status', 'returned')
+            || PurchaseReturnItem::query()->whereIn('faulty_item_id', $this->faultyItems->pluck('id'))->exists();
+    }
+
     public function sale(): BelongsTo
     {
         return $this->belongsTo(Sale::class);

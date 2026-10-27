@@ -123,7 +123,7 @@ class SaleReturnService
     {
         $return->loadMissing('faultyItems');
 
-        if ($return->return_type === 'bill_credit' || $return->faultyItems->contains('status', 'returned')) {
+        if ($return->return_type === 'bill_credit' || $return->hasSupplierReturns()) {
             throw ValidationException::withMessages([
                 'returnItems' => __('This return is linked to another bill or supplier return and cannot be changed here.'),
             ]);

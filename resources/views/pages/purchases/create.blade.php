@@ -334,6 +334,11 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
     public function savePurchase(): void
     {
+        if ($this->editingPurchaseId && Purchase::query()->findOrFail($this->editingPurchaseId)->isLinkedToReturn()) {
+            $this->addError('invoice_no', __('This purchase is linked to a supplier return and cannot be edited.'));
+
+            return;
+        }
         $rules = [
             'invoice_no' => ['required', 'string', Rule::unique(Purchase::class, 'invoice_no')->ignore($this->editingPurchaseId)],
             'date' => 'required|date',
@@ -415,8 +420,12 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
         DB::transaction(function () use ($subtotal, $grandTotal, $capturedPaidAmount, $dueAmount, $paymentStatus, $paymentRows): void {
             $purchase = $this->editingPurchaseId
-                ? Purchase::query()->with(['items', 'payments'])->findOrFail($this->editingPurchaseId)
+                ? Purchase::query()->with(['items', 'payments'])->lockForUpdate()->findOrFail($this->editingPurchaseId)
                 : new Purchase();
+
+            if ($purchase->exists && $purchase->isLinkedToReturn()) {
+                throw \Illuminate\Validation\ValidationException::withMessages(['invoice_no' => __('This purchase is linked to a supplier return and cannot be edited.')]);
+            }
 
             $oldSupplierId = $purchase->supplier_id;
             $oldDueAmount = (float) ($purchase->due_amount ?? 0);
@@ -953,6 +962,7 @@ new #[Title('Record Wholesale Purchase')] class extends Component
 
     private function loadPurchaseForEditing(Purchase $purchase): void
     {
+        abort_if($purchase->isLinkedToReturn(), 403, __('This purchase is linked to a supplier return and cannot be edited.'));
         $purchase->load([
             'items.product',
             'payments.sourcePayment.paymentable' => function (\Illuminate\Database\Eloquent\Relations\MorphTo $morphTo) {

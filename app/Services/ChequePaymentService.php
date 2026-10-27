@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Customer;
 use App\Models\Payment;
 use App\Models\Purchase;
+use App\Models\PurchaseReturn;
 use App\Models\Sale;
 use App\Models\Supplier;
 use Carbon\CarbonInterface;
@@ -414,7 +415,7 @@ class ChequePaymentService
             ->where('cheque_status', 'pending')
             ->sum('amount');
         $paidAmount = (float) $purchase->paid_amount;
-        $dueAmount = round(max(0, (float) $purchase->grand_total - $paidAmount - $pendingChequeAmount), 2);
+        $dueAmount = round(max(0, (float) $purchase->grand_total - $paidAmount - $pendingChequeAmount - PurchaseReturn::dueReductionFor($purchase->id)), 2);
 
         $status = 'cheque_pending';
         if ($pendingChequeAmount <= 0 && $dueAmount <= 0) {

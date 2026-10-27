@@ -41,7 +41,7 @@
     @if ($allowRevert)
         <x-sale-return-actions :return="$return" />
     @endif
-    @if ($allowRevert && $return->return_type !== 'bill_credit' && ! $return->faultyItems->contains('status', 'returned') && auth()->user()?->hasPermission('process_return'))
+    @if ($allowRevert && $return->return_type !== 'bill_credit' && ! $return->hasSupplierReturns() && auth()->user()?->hasPermission('process_return'))
         <button type="button" wire:click="revertReturn({{ $return->id }})" wire:confirm="Revert this return and restore its stock and financial balances?" class="mt-3 text-xs font-semibold text-rose-600">{{ __('Revert Return') }}</button>
     @endif
     @if ($return->notes)

@@ -3,6 +3,7 @@
 use App\Models\Supplier;
 use App\Models\Payment;
 use App\Models\Purchase;
+use App\Models\PurchaseReturn;
 use App\Models\Setting;
 use App\Services\ActivityLogger;
 use Flux\Flux;
@@ -313,8 +314,20 @@ new #[Title('Manage Suppliers')] class extends Component
                 'raw_date' => $pm->created_at,
             ]);
 
-        // Merge and sort chronologically
-        return $purchases->concat($payments)->sortBy('raw_date')->values()->all();
+        $returns = PurchaseReturn::query()->where('supplier_id', $this->selectedSupplierId)
+            ->with('replacementPurchase')->get()->map(fn (PurchaseReturn $return): array => [
+                'type' => 'return', 'id' => $return->id, 'date' => $return->date,
+                'ref' => $return->invoice_no,
+                'description' => __('Purchase return · Cash received: Rs :cash · Old due reduced: Rs :due · Exchange credit: Rs :credit', [
+                    'cash' => number_format((float) $return->refund_amount, 2),
+                    'due' => number_format((float) $return->adjusted_amount, 2),
+                    'credit' => number_format((float) $return->replacementPurchase?->return_credit_amount, 2),
+                ]),
+                'credit' => 0, 'debit' => (float) $return->adjusted_amount + (float) $return->replacementPurchase?->return_credit_amount,
+                'raw_date' => $return->created_at,
+            ]);
+
+        return $purchases->concat($payments)->concat($returns)->sortBy('raw_date')->values()->all();
     }
 
     #[Computed]
