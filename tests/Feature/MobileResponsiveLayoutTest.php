@@ -38,3 +38,15 @@ test('business reports use two column mobile summary and result cards', function
         ->assertSee('grid grid-cols-1 gap-3 p-3 pb-28 sm:grid-cols-2 md:hidden', false)
         ->assertSee('wire:model.live.debounce.500ms="search"', false);
 });
+
+test('tablet checkout shows products alongside the cart and uses the uploaded branding', function () {
+    $this->actingAs(User::factory()->create(['role' => 'super_admin']));
+
+    $this->get(route('pos.index'))
+        ->assertOk()
+        ->assertSee('md:grid-cols-[minmax(0,1fr)_300px]', false)
+        ->assertSee('md:max-h-[calc(100dvh-14rem)]', false)
+        ->assertSee('images/twinsofte-logo.png', false)
+        ->assertSee('viewport-fit=cover', false)
+        ->assertSee('max-h-[90dvh]', false);
+});

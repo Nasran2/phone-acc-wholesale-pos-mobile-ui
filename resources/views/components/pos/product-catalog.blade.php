@@ -133,8 +133,8 @@ new class extends Component
 ?>
 
 <div class="min-w-0">
-    <div class="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_12rem_minmax(0,1fr)]">
-        <div class="flex min-w-0 items-center gap-3 rounded-3xl border border-zinc-200 bg-white px-4 py-3 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
+    <div class="grid min-w-0 gap-3 sm:grid-cols-2">
+        <div class="flex min-w-0 items-center gap-3 sm:col-span-2 rounded-3xl border border-zinc-200 bg-white px-4 py-3 shadow-[0_12px_35px_rgba(15,23,42,0.05)]">
             <flux:icon.magnifying-glass class="size-5 shrink-0 text-zinc-400" />
             <input
                 wire:model.live.debounce.250ms="search"
@@ -187,9 +187,9 @@ new class extends Component
         @endforeach
     </div>
 
-    <div class="scrollbar-none min-w-0 overflow-y-auto pb-24 lg:max-h-[calc(100vh-14rem)] lg:pb-0">
+    <div class="scrollbar-none min-w-0 overflow-y-auto pb-24 md:max-h-[calc(100dvh-20rem)] md:pb-0">
         @php($products = $this->products)
-        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-4 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             @forelse ($products->take($productLimit) as $p)
                 <div
                     class="group relative flex min-h-[9.25rem] cursor-pointer select-none flex-col justify-between overflow-hidden rounded-[1.25rem] border border-zinc-200 bg-white p-2 shadow-[0_12px_28px_rgba(15,23,42,0.05)] transition data-loading:pointer-events-none data-loading:opacity-70 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-[0_24px_60px_rgba(124,58,237,0.12)] sm:min-h-44 sm:rounded-[1.75rem] sm:p-4 sm:shadow-[0_18px_45px_rgba(15,23,42,0.06)]"

@@ -316,166 +316,11 @@ new #[Title('Manage Customers')] class extends Component
     #[Computed]
     public function selectedCustomerLedger()
     {
-        if (! $this->selectedCustomerId) {
-            return collect();
-        }
-
-        $customer = Customer::query()->findOrFail($this->selectedCustomerId);
-
-        $openingBalance = collect();
-        if ((float) $customer->opening_balance > 0) {
-            $openingBalance->push([
-                'type' => 'opening',
-                'badge' => __('Opening'),
-                'id' => 'opening-' . $customer->id,
-                'date' => $customer->created_at,
-                'bill_date' => $customer->created_at,
-                'paid_date' => null,
-                'bill_no' => __('Opening Balance'),
-                'ref' => __('Opening Balance'),
-                'description' => __('Opening customer due balance'),
-                'payment_method' => null,
-                'payment_status' => __('due'),
-                'debit' => (float) $customer->opening_balance,
-                'credit' => 0.00,
-                'raw_date' => $customer->created_at,
-            ]);
-        }
-
-        $sales = Sale::query()
-            ->with(['payments' => fn ($query) => $query->orderBy('date')->orderBy('id')])
-            ->where('customer_id', $this->selectedCustomerId)
-            ->orderBy('date')
-            ->orderBy('id')
-            ->get();
-
-        $salesMapped = $sales->map(fn ($sale) => [
-                'type' => 'invoice',
-                'badge' => __('Bill'),
-                'id' => $sale->id,
-                'date' => $sale->date,
-                'bill_date' => $sale->date,
-                'paid_date' => $sale->payments->max('date'),
-                'bill_no' => $sale->invoice_no,
-                'ref' => $sale->invoice_no,
-                'description' => __('Bill created') . ' - ' . strtoupper((string) $sale->payment_status),
-                'payment_method' => null,
-                'payment_status' => $sale->payment_status,
-                'debit' => (float) $sale->grand_total,
-                'credit' => 0.00,
-                'raw_date' => $sale->created_at,
-            ]);
-
-        $salePayments = $sales->flatMap(fn ($sale) => $sale->payments->map(fn ($pm) => [
-                'type' => 'payment',
-                'badge' => __('Payment'),
-                'id' => $pm->id,
-                'date' => $pm->date,
-                'bill_date' => $sale->date,
-                'paid_date' => $pm->date,
-                'bill_no' => $sale->invoice_no,
-                'ref' => $pm->reference ?: 'PAY-' . $pm->id,
-                'description' => __('Payment received for bill') . ' ' . $sale->invoice_no,
-                'payment_method' => $pm->payment_method,
-                'payment_status' => $pm->cheque_status ?: __('paid'),
-                'invoice_status' => $sale->payment_status,
-                'invoice_due' => (float) $sale->due_amount,
-                'debit' => 0.00,
-                'credit' => (float) $pm->amount,
-                'raw_date' => $pm->created_at,
-            ]));
-
-        $payments = Payment::query()
-            ->where('paymentable_type', Customer::class)
-            ->where('paymentable_id', $this->selectedCustomerId)
-            ->get()
-            ->map(fn ($pm) => [
-                'type' => 'account_payment',
-                'badge' => __('Account Payment'),
-                'id' => $pm->id,
-                'date' => $pm->date,
-                'bill_date' => null,
-                'paid_date' => $pm->date,
-                'bill_no' => __('Account Ledger'),
-                'ref' => $pm->reference ?: 'PAY-' . $pm->id,
-                'description' => __('Account payment received'),
-                'payment_method' => $pm->payment_method,
-                'payment_status' => __('paid'),
-                'debit' => 0.00,
-                'credit' => (float) $pm->amount,
-                'raw_date' => $pm->created_at,
-            ]);
-
-        $supplierPartyCheques = Payment::query()
-            ->where('paymentable_type', Purchase::class)
-            ->where('payment_method', 'cheque')
-            ->where('cheque_type', 'party')
-            ->where('party_customer_id', $this->selectedCustomerId)
-            ->with(['paymentable.supplier', 'sourcePayment.paymentable'])
-            ->get()
-            ->map(function ($pm) {
-                $purchase = $pm->paymentable;
-                $sourceSale = $pm->sourcePayment?->paymentable;
-
-                return [
-                    'type' => 'payment',
-                    'badge' => __('Party Cheque'),
-                    'id' => 'supplier-party-' . $pm->id,
-                    'date' => $pm->date,
-                    'bill_date' => $purchase?->date,
-                    'paid_date' => $pm->date,
-                    'bill_no' => $sourceSale?->invoice_no ?? __('Customer Cheque'),
-                    'ref' => $pm->cheque_no ?: $pm->reference ?: 'CHQ-' . $pm->id,
-                    'description' => __('Customer cheque used for supplier purchase') . ' ' . ($purchase?->invoice_no ?? ''),
-                    'payment_method' => __('party cheque'),
-                    'payment_status' => $pm->cheque_status ?: __('pending'),
-                    'invoice_status' => $purchase?->payment_status,
-                    'invoice_due' => (float) ($purchase?->due_amount ?? 0),
-                    'cheque_no' => $pm->cheque_no,
-                    'cheque_bank' => $pm->cheque_bank,
-                    'cheque_date' => $pm->cheque_date,
-                    'supplier_name' => $purchase?->supplier?->name,
-                    'purchase_invoice_no' => $purchase?->invoice_no,
-                    'debit' => 0.00,
-                    'credit' => (float) $pm->amount,
-                    'raw_date' => $pm->created_at,
-                ];
-            });
-
-        $returns = SaleReturn::query()
-            ->with(['sale', 'items'])
-            ->where('customer_id', $this->selectedCustomerId)
-            ->get()
-            ->map(fn ($ret) => [
-                'type' => 'return',
-                'badge' => __('Return'),
-                'id' => $ret->id,
-                'date' => $ret->date,
-                'bill_date' => $ret->date,
-                'paid_date' => null,
-                'bill_no' => $ret->invoice_no,
-                'ref' => $ret->invoice_no,
-                'description' => $ret->type_label.' · '.__('Original invoice').': '.($ret->sale?->invoice_no ?? '-'),
-                'return_value' => $ret->total_amount,
-                'adjustment_label' => $ret->return_type === 'bill_credit' ? __('Bill credit') : __('Due reduced'),
-                'refund_amount' => (float) $ret->refund_amount,
-                'adjusted_amount' => (float) $ret->adjusted_amount,
-                'payment_method' => null,
-                'payment_status' => $ret->type_label,
-                'debit' => 0.00,
-                'credit' => $ret->return_type === 'adjust_due' ? (float) $ret->adjusted_amount : 0.0,
-                'raw_date' => $ret->created_at,
-            ]);
-
-        return $openingBalance
-            ->concat($salesMapped)
-            ->concat($salePayments)
-            ->concat($payments)
-            ->concat($supplierPartyCheques)
-            ->concat($returns)
-            ->sortBy('raw_date')
-            ->values();
+        return $this->selectedCustomerId
+            ? app(\App\Services\CustomerLedgerService::class)->rows($this->selectedCustomer)
+            : collect();
     }
+
 }; ?>
 
 <div class="flex flex-col gap-6" x-data="{
@@ -492,7 +337,7 @@ new #[Title('Manage Customers')] class extends Component
     ledgerTab: 'bills',
     init() {
         this.$watch('ledgerOpen', (val) => {
-            if (!val) this.resetSharePdf();
+            this.resetSharePdf();
         });
         this.$watch('editingCustomerId', (val) => {
             this.mobileCustomerEditOpen = !!val && window.innerWidth < 1024;
@@ -502,137 +347,14 @@ new #[Title('Manage Customers')] class extends Component
             this.mobileCustomerEditOpen = true;
         }
     },
-    resetSharePdf() {
-        this.shareCopied = false;
-        this.sharePreparing = false;
-        this.sharePdfError = false;
-        this.sharePdfFile = null;
-        if (this.sharePdfUrl) {
-            URL.revokeObjectURL(this.sharePdfUrl);
-            this.sharePdfUrl = null;
-        }
-    },
-    async loadPdfScript(src, globalChecker) {
-        if (globalChecker()) return;
-        const existingScript = document.querySelector(`script[src='${src}']`);
-        if (existingScript) {
-            await new Promise((resolve, reject) => {
-                existingScript.addEventListener('load', resolve, { once: true });
-                existingScript.addEventListener('error', reject, { once: true });
-                setTimeout(resolve, 1200);
-            });
-            return;
-        }
-        await new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            const timeout = setTimeout(() => reject(new Error(`Timed out loading ${src}`)), 10000);
-            script.src = src;
-            script.onload = () => { clearTimeout(timeout); resolve(); };
-            script.onerror = () => { clearTimeout(timeout); reject(new Error(`Failed to load ${src}`)); };
-            document.head.appendChild(script);
-        });
-    },
+    resetSharePdf() { window.PosPdf.reset(this); },
+    destroy() { this.resetSharePdf(); },
     async prepareLedgerPdf() {
-        if (this.sharePreparing || this.sharePdfFile) return;
-
-        const customerName = this.$refs.ledgerTitle?.innerText?.trim() || 'Ledger';
-        const templateId = 'ledger-pdf-template';
-        const originalEl = document.getElementById(templateId);
-
-        if (!originalEl) {
-            this.sharePdfError = true;
-            return;
-        }
-
-        this.sharePreparing = true;
-        this.sharePdfError = false;
-
-        try {
-            await this.loadPdfScript('/vendor/pos-share/html2canvas-pro.min.js', () => typeof window.html2canvas !== 'undefined');
-            await this.loadPdfScript('/vendor/pos-share/jspdf.umd.min.js', () => typeof window.jsPDF !== 'undefined' || !!window.jspdf?.jsPDF);
-
-            if (window.jspdf?.jsPDF && typeof window.jsPDF === 'undefined') {
-                window.jsPDF = window.jspdf.jsPDF;
-            }
-
-            if (typeof window.html2canvas === 'undefined' || typeof window.jsPDF === 'undefined') {
-                throw new Error('PDF generator libraries are unavailable.');
-            }
-
-            const wrapper = document.createElement('div');
-            wrapper.style.position = 'fixed';
-            wrapper.style.top = '-9999px';
-            wrapper.style.left = '-9999px';
-            wrapper.style.width = '794px';
-            wrapper.style.background = 'white';
-            wrapper.style.zIndex = '-1';
-
-            const clonedEl = originalEl.cloneNode(true);
-            clonedEl.classList.remove('hidden', 'print:block');
-            clonedEl.style.display = 'block';
-            clonedEl.style.width = '794px';
-            clonedEl.style.margin = '0';
-            clonedEl.style.padding = '20px';
-
-            wrapper.appendChild(clonedEl);
-            document.body.appendChild(wrapper);
-
-            const canvas = await html2canvas(clonedEl, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false,
-                windowWidth: 794,
-                width: 794
-            });
-
-            document.body.removeChild(wrapper);
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.95);
-            const pdf = new window.jsPDF({
-                orientation: 'portrait',
-                unit: 'mm',
-                format: 'a4'
-            });
-
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-            pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-
-            const pdfBlob = pdf.output('blob');
-            this.sharePdfFile = new File([pdfBlob], `${customerName}-Ledger.pdf`, { type: 'application/pdf' });
-            this.sharePdfUrl = URL.createObjectURL(pdfBlob);
-        } catch (e) {
-            console.error('PDF Generation Error:', e);
-            this.sharePdfError = true;
-        } finally {
-            this.sharePreparing = false;
-        }
+        await window.PosPdf.prepare(this, this.$refs.ledgerTitle?.dataset.pdfUrl, this.$refs.ledgerTitle?.innerText?.trim() || 'Document');
     },
-    async sharePdfAction() {
-        if (!this.sharePdfFile) return;
+    downloadPdfFile() { window.PosPdf.download(this); },
+    async sharePdfAction() { await window.PosPdf.share(this); }
 
-        if (navigator.canShare && navigator.canShare({ files: [this.sharePdfFile] })) {
-            try {
-                await navigator.share({
-                    title: 'Customer Ledger Statement',
-                    text: 'Please find your account ledger statement attached.',
-                    files: [this.sharePdfFile]
-                });
-                return;
-            } catch (err) {
-                if (err.name !== 'AbortError') console.error('Share failed:', err);
-            }
-        }
-
-        const a = document.createElement('a');
-        a.href = this.sharePdfUrl;
-        a.download = this.sharePdfFile.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    }
 }">
     <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -901,7 +623,7 @@ new #[Title('Manage Customers')] class extends Component
             <!-- Drawer Header -->
             <div class="flex items-center justify-between border-b border-zinc-100 p-5 bg-zinc-50/50">
                 <div>
-                    <h3 class="font-display font-bold text-zinc-950" x-ref="ledgerTitle">
+                    <h3 class="font-display font-bold text-zinc-950" x-ref="ledgerTitle" data-pdf-url="{{ $selectedCustomerId ? route('customers.ledger.pdf', $selectedCustomerId) : '' }}">
                         {{ $this->selectedCustomer?->name }}
                     </h3>
                     <p class="text-xs text-zinc-500 mt-1">{{ __('Account Statement Ledger Dues Log') }}</p>
@@ -1163,7 +885,7 @@ new #[Title('Manage Customers')] class extends Component
                                     <flux:icon.share class="size-3 mr-1" />
                                     Share
                                 </flux:button>
-                                <flux:button as="a" x-bind:href="sharePdfUrl" x-bind:download="$refs.ledgerTitle?.innerText?.trim() + '-Ledger.pdf'" variant="ghost" size="sm">
+                                <flux:button as="a" @click.prevent="downloadPdfFile()" href="#" variant="ghost" size="sm">
                                     <flux:icon.arrow-down-tray class="size-3" />
                                 </flux:button>
                             </div>
@@ -1171,7 +893,7 @@ new #[Title('Manage Customers')] class extends Component
                     </div>
 
                     <div x-show="sharePdfError" x-collapse class="mt-3 rounded-2xl bg-rose-50 border border-rose-100 p-3 text-xs text-rose-600">
-                        Failed to generate PDF. Make sure you are using a modern browser.
+                        PDF could not be prepared. Check your connection and try again. Your saved records are safe.
                     </div>
                 </div>
             </div>

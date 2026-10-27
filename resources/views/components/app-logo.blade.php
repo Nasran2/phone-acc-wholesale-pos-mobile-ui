@@ -5,7 +5,7 @@
 @php
     $businessName = \App\Models\Setting::get('business_name', config('app.name', 'Laravel')) ?: config('app.name', 'Laravel');
     $businessLogo = \App\Models\Setting::get('business_logo');
-    $businessLogoUrl = $businessLogo ? \Illuminate\Support\Facades\Storage::url($businessLogo) : null;
+    $businessLogoUrl = $businessLogo ? \Illuminate\Support\Facades\Storage::url($businessLogo) : asset('images/twinsofte-logo.png');
 @endphp
 
 @if($sidebar)

@@ -1459,7 +1459,7 @@ new #[Title('POS Terminal')] class extends Component
 }; ?>
 
 <div
-    class="min-h-[calc(100vh-2rem)] overflow-x-hidden rounded-[2rem] bg-white text-zinc-950"
+    class="min-h-[calc(100dvh-2rem)] overflow-x-hidden rounded-[2rem] bg-white text-zinc-950"
     x-data="{
         mobCartOpen: $wire.entangle('cartDrawerOpen'),
         checkoutOpen: $wire.entangle('checkoutOpen'),
@@ -1473,10 +1473,7 @@ new #[Title('POS Terminal')] class extends Component
         sharePdfUrl: null,
         init() {
             this.$watch('successOpen', (isOpen) => {
-                if (isOpen) {
-                    this.resetSharePdf();
-                    this.$nextTick(() => setTimeout(() => this.prepareBillPdf(), 350));
-                }
+                this.resetSharePdf();
             });
         },
         playSuccessBeep() {
@@ -1496,19 +1493,9 @@ new #[Title('POS Terminal')] class extends Component
             osc.start();
             osc.stop(ctx.currentTime + 0.1);
         },
-        resetSharePdf() {
-            this.shareCopied = false;
-            this.sharePreparing = false;
-            this.sharePdfError = false;
-            this.sharePdfFile = null;
-            if (this.sharePdfUrl) {
-                URL.revokeObjectURL(this.sharePdfUrl);
-                this.sharePdfUrl = null;
-            }
-        },
-        isAndroidApp() {
-            return typeof window.ImranAndroid !== 'undefined';
-        },
+        resetSharePdf() { window.PosPdf.reset(this); },
+        destroy() { this.resetSharePdf(); },
+        isAndroidApp() { return typeof window.ImranAndroid !== 'undefined'; },
         money(value) {
             const amount = Number.parseFloat(value || 0);
             return amount.toLocaleString('en-US', {
@@ -1524,231 +1511,24 @@ new #[Title('POS Terminal')] class extends Component
 
             window.print();
         },
-        async blobToBase64(blob) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(String(reader.result || '').split(',')[1] || '');
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
-        },
-        async sharePdfWithAndroid() {
-            if (!this.sharePdfFile) {
-                return false;
-            }
-
-            if (!this.isAndroidApp() || typeof window.ImranAndroid.sharePdf !== 'function') {
-                return false;
-            }
-
-            const base64 = await this.blobToBase64(this.sharePdfFile);
-            window.ImranAndroid.sharePdf(this.sharePdfFile.name, base64);
-            return true;
-        },
-        async loadPdfScript(src, globalChecker) {
-            if (globalChecker()) {
-                return;
-            }
-
-            const existingScript = document.querySelector(`script[src='${src}']`);
-            if (existingScript) {
-                await new Promise((resolve, reject) => {
-                    existingScript.addEventListener('load', resolve, { once: true });
-                    existingScript.addEventListener('error', reject, { once: true });
-                    setTimeout(resolve, 1200);
-                });
-                return;
-            }
-
-            await new Promise((resolve, reject) => {
-                const script = document.createElement('script');
-                const timeout = setTimeout(() => reject(new Error(`Timed out loading ${src}`)), 10000);
-                script.src = src;
-                script.onload = () => {
-                    clearTimeout(timeout);
-                    resolve();
-                };
-                script.onerror = () => {
-                    clearTimeout(timeout);
-                    reject(new Error(`Failed to load ${src}`));
-                };
-                document.head.appendChild(script);
-            });
-        },
         async prepareBillPdf() {
-            if (this.sharePreparing || this.sharePdfFile) {
-                return;
-            }
-
-            const invoiceNo = this.$refs.shareBillTitle?.innerText?.trim() || 'Invoice';
-            const a4El = document.getElementById('a4-invoice-template');
-            const isA4 = !!a4El;
-            const templateId = isA4 ? 'a4-invoice-template' : 'thermal-receipt-template';
-            const originalEl = document.getElementById(templateId);
-
-            if (!originalEl) {
-                this.sharePdfError = true;
-                return;
-            }
-
-            this.sharePreparing = true;
-            this.sharePdfError = false;
-
-            try {
-                await this.loadPdfScript(
-                    '/vendor/pos-share/html2canvas-pro.min.js',
-                    () => typeof window.html2canvas !== 'undefined'
-                );
-
-                await this.loadPdfScript(
-                    '/vendor/pos-share/jspdf.umd.min.js',
-                    () => typeof window.jsPDF !== 'undefined' || !!window.jspdf?.jsPDF
-                );
-
-                if (window.jspdf?.jsPDF && typeof window.jsPDF === 'undefined') {
-                    window.jsPDF = window.jspdf.jsPDF;
-                }
-
-                if (typeof window.html2canvas === 'undefined' || typeof window.jsPDF === 'undefined') {
-                    throw new Error('PDF generator libraries are unavailable.');
-                }
-
-                const wrapper = document.createElement('div');
-                wrapper.dataset.pdfShareWrapper = 'true';
-                wrapper.style.position = 'fixed';
-                wrapper.style.left = '0';
-                wrapper.style.top = '0';
-                wrapper.style.width = isA4 ? '794px' : '300px';
-                wrapper.style.minHeight = isA4 ? '1123px' : 'auto';
-                wrapper.style.zIndex = '-99999';
-                wrapper.style.pointerEvents = 'none';
-                wrapper.style.background = '#ffffff';
-                wrapper.style.overflow = 'visible';
-
-                const clone = originalEl.cloneNode(true);
-                clone.style.display = 'block';
-                clone.style.visibility = 'visible';
-                clone.classList.remove('hidden');
-                clone.classList.remove('print:block');
-                clone.style.position = 'static';
-                clone.style.width = isA4 ? '794px' : '100%';
-                clone.style.height = 'auto';
-                clone.style.minHeight = isA4 ? '1123px' : 'auto';
-                clone.style.padding = isA4 ? '0' : '12px';
-                clone.style.background = '#ffffff';
-                clone.style.color = '#000000';
-
-                if (isA4 && clone.firstElementChild) {
-                    clone.firstElementChild.style.height = 'auto';
-                    clone.firstElementChild.style.minHeight = '1123px';
-                    clone.firstElementChild.style.overflow = 'visible';
-                }
-
-                wrapper.appendChild(clone);
-                document.body.appendChild(wrapper);
-
-                const canvas = await window.html2canvas(clone, {
-                    scale: this.isAndroidApp() ? 1 : 1.5,
-                    useCORS: true,
-                    logging: false,
-                    backgroundColor: '#ffffff'
-                });
-
-                wrapper.remove();
-
-                const imgData = canvas.toDataURL('image/jpeg', this.isAndroidApp() ? 0.88 : 0.98);
-                const imgWidth = isA4 ? 210 : 80;
-                const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-                const pdf = new window.jsPDF({
-                    orientation: 'portrait',
-                    unit: 'mm',
-                    format: isA4 ? 'a4' : [80, imgHeight]
-                });
-
-                const pageHeight = pdf.internal.pageSize.getHeight();
-                let remainingHeight = imgHeight;
-                let imageTop = 0;
-
-                pdf.addImage(imgData, 'JPEG', 0, imageTop, imgWidth, imgHeight);
-                remainingHeight -= pageHeight;
-
-                while (remainingHeight > 1) {
-                    imageTop -= pageHeight;
-                    pdf.addPage();
-                    pdf.addImage(imgData, 'JPEG', 0, imageTop, imgWidth, imgHeight);
-                    remainingHeight -= pageHeight;
-                }
-
-                const blob = pdf.output('blob');
-
-                this.sharePdfFile = new File([blob], `${invoiceNo}.pdf`, { type: 'application/pdf' });
-                this.sharePdfUrl = URL.createObjectURL(this.sharePdfFile);
-            } catch (err) {
-                console.error('PDF generation error:', err);
-                this.sharePdfError = true;
-            } finally {
-                document.querySelectorAll('[data-pdf-share-wrapper]').forEach((el) => el.remove());
-                this.sharePreparing = false;
-            }
+            await window.PosPdf.prepare(this, this.$refs.shareBillTitle?.dataset.pdfUrl, this.$refs.shareBillTitle?.innerText?.trim() || 'Invoice');
         },
-        downloadPdfFile() {
-            if (!this.sharePdfFile) {
-                return;
-            }
-
-            if (this.isAndroidApp() && typeof window.ImranAndroid.downloadPdf === 'function') {
-                this.blobToBase64(this.sharePdfFile).then(base64 => {
-                    window.ImranAndroid.downloadPdf(this.sharePdfFile.name, base64);
-                });
-                return;
-            }
-
-            const link = document.createElement('a');
-            link.href = this.sharePdfUrl || URL.createObjectURL(this.sharePdfFile);
-            link.download = this.sharePdfFile.name;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-        },
+        downloadPdfFile() { window.PosPdf.download(this); },
         async shareBill() {
-            this.shareCopied = false;
-
+            const url = this.$refs.shareBillTitle?.dataset.pdfUrl;
+            if (window.ImranAndroid?.sharePdfUrl) {
+                await window.PosPdf.shareRemote(this, url);
+                return;
+            }
             if (!this.sharePdfFile) {
                 await this.prepareBillPdf();
-            }
-
-            if (!this.sharePdfFile) {
-                alert('PDF file is not ready yet. Please try again in a moment.');
                 return;
             }
-
-            try {
-                if (await this.sharePdfWithAndroid()) {
-                    this.shareCopied = true;
-                    setTimeout(() => this.shareCopied = false, 1800);
-                } else if (navigator.share && navigator.canShare?.({ files: [this.sharePdfFile] })) {
-                    await navigator.share({
-                        files: [this.sharePdfFile],
-                        title: this.sharePdfFile.name.replace('.pdf', ''),
-                    });
-                } else {
-                    this.downloadPdfFile();
-                }
-
-                this.shareCopied = true;
-                setTimeout(() => this.shareCopied = false, 1800);
-            } catch (err) {
-                if (err?.name !== 'AbortError') {
-                    console.error('PDF sharing error:', err);
-                    this.downloadPdfFile();
-                    this.shareCopied = true;
-                    setTimeout(() => this.shareCopied = false, 1800);
-                }
-            }
+            await window.PosPdf.share(this);
         }
+
     }"
-    x-effect="if (successOpen && !sharePreparing && !sharePdfFile && !sharePdfError) { $nextTick(() => setTimeout(() => prepareBillPdf(), 250)) }"
     x-on:play-beep.window="playSuccessBeep()">
     <!-- Hidden barcode input form for active scanner tracking -->
     <form wire:submit.prevent="handleBarcodeInput" class="sr-only">
@@ -1764,7 +1544,7 @@ new #[Title('POS Terminal')] class extends Component
         <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div class="flex items-center gap-3">
                 <div class="grid h-11 w-11 place-items-center rounded-2xl bg-zinc-950 text-white shadow-[0_14px_28px_rgba(15,23,42,0.22)]">
-                    <flux:icon.shopping-bag class="size-5" />
+                    <img src="{{ asset('images/twinsofte-logo.png') }}" alt="Twinsofte POS" class="size-11 rounded-2xl object-contain" />
                 </div>
                 <div>
                     <p class="text-[10px] font-black uppercase tracking-widest text-violet-600">Imran POS</p>
@@ -1791,7 +1571,7 @@ new #[Title('POS Terminal')] class extends Component
 
 
 
-    <div class="mt-4 rounded-[1.75rem] border border-violet-100 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.08)] lg:hidden">
+    <div class="mt-4 rounded-[1.75rem] border border-violet-100 bg-white p-4 shadow-[0_16px_45px_rgba(15,23,42,0.08)] md:hidden">
         <div class="mb-2 flex items-center justify-between gap-3">
             <span class="text-[10px] font-black uppercase tracking-widest text-violet-500">{{ __('Sale Customer') }}</span>
             <button type="button" wire:click="openQuickCustomerModal" class="inline-flex h-9 items-center gap-1.5 rounded-full bg-violet-50 px-3 text-xs font-black text-violet-700 ring-1 ring-violet-100 transition active:scale-95">
@@ -1821,8 +1601,8 @@ new #[Title('POS Terminal')] class extends Component
         </div>
     </div>
 
-    <div class="mt-4 mb-3 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div class="hidden lg:block"></div>
+    <div class="mt-4 mb-3 grid min-w-0 gap-3 sm:grid-cols-2 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div class="hidden md:block"></div>
 
         <div class="flex items-center justify-between gap-3 rounded-3xl border border-violet-200 bg-violet-50 px-4 py-3 shadow-[0_12px_35px_rgba(124,58,237,0.08)]">
             <span class="flex items-center gap-1.5 text-xs font-black text-violet-800">
@@ -1845,14 +1625,14 @@ new #[Title('POS Terminal')] class extends Component
     </div>
 
     <!-- Grid POS Workspace -->
-    <div class="grid min-h-0 min-w-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_390px]">
+    <div class="grid min-h-0 min-w-0 flex-1 gap-4 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_390px]">
         <!-- 1. Left Column: Product Catalog -->
         <div class="min-w-0">
             <livewire:pos.product-catalog wire:model.live="saleDate" />
         </div>
 
         <!-- 2. Right Column: Desktop Cart Panel (Hidden on Mobile) -->
-        <div class="hidden min-h-0 min-w-0 flex-col rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_22px_70px_rgba(15,23,42,0.10)] lg:flex lg:max-h-[calc(100vh-14rem)]">
+        <div class="hidden min-h-0 min-w-0 flex-col rounded-[2rem] border border-zinc-200 bg-white p-5 shadow-[0_22px_70px_rgba(15,23,42,0.10)] md:flex md:max-h-[calc(100dvh-14rem)]">
             <div class="flex items-center justify-between border-b border-zinc-100 pb-4">
                 <div>
                     <p class="text-[10px] font-black uppercase tracking-widest text-violet-500">{{ __('Current sale') }}</p>
@@ -1973,7 +1753,7 @@ new #[Title('POS Terminal')] class extends Component
 
     <!-- 3. MOBILE FLOATING CART BUTTON CHIP (Only on mobile when cart > 0) -->
     @if (count($cart) > 0)
-    <div class="fixed bottom-16 right-4 z-40 lg:hidden">
+    <div class="fixed bottom-16 right-4 z-40 md:hidden">
         <button
             type="button"
             class="flex items-center gap-2 rounded-full bg-zinc-950 px-5 py-3 font-bold text-white shadow-xl shadow-zinc-300 transition transform hover:scale-105 active:scale-95"
@@ -1986,7 +1766,7 @@ new #[Title('POS Terminal')] class extends Component
     </div>
     @endif
 
-    <div class="fixed bottom-3 left-3 right-3 z-40 lg:hidden">
+    <div class="fixed bottom-3 left-3 right-3 z-40 md:hidden">
         <nav class="rounded-[1.75rem] border border-zinc-200 bg-white/95 px-2 py-2 shadow-[0_18px_55px_rgba(15,23,42,0.14)] backdrop-blur-xl">
             <div class="grid grid-cols-5 items-center text-[10px] font-bold text-zinc-400">
                 <a href="{{ route('dashboard') }}" wire:navigate class="flex flex-col items-center gap-1">
@@ -2022,7 +1802,7 @@ new #[Title('POS Terminal')] class extends Component
     <div
         x-cloak
         x-show="mobCartOpen"
-        class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 transition-opacity backdrop-blur-sm lg:hidden"
+        class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 transition-opacity backdrop-blur-sm md:hidden"
         x-transition:enter="ease-out duration-300"
         x-transition:enter-start="opacity-0"
         x-transition:enter-end="opacity-100"
@@ -2592,7 +2372,7 @@ new #[Title('POS Terminal')] class extends Component
                     <flux:textarea wire:model="notes" :label="__('Internal Invoice Notes')" rows="2" />
                 </div>
 
-                <flux:button type="submit" variant="primary" class="w-full mt-2">
+                <flux:button type="submit" wire:loading.attr="disabled" wire:target="submitCheckout" variant="primary" class="w-full mt-2">
                     {{ __('Complete Checkout Order') }}
                 </flux:button>
             </form>
@@ -2611,7 +2391,7 @@ new #[Title('POS Terminal')] class extends Component
         x-transition:leave-start="opacity-100"
         x-transition:leave-end="opacity-0">
         <div
-            class="w-full max-w-sm bg-white rounded-3xl shadow-2xl p-6 text-center flex flex-col items-center gap-4"
+            class="w-full max-h-[90dvh] overflow-y-auto max-w-sm bg-white rounded-3xl shadow-2xl p-6 text-center flex flex-col items-center gap-4"
             x-transition:enter="ease-out duration-300 transform scale-90"
             x-transition:enter-start="scale-90"
             x-transition:enter-end="scale-100"
@@ -2625,7 +2405,7 @@ new #[Title('POS Terminal')] class extends Component
 
             <div>
                 <h3 class="font-display text-lg font-bold text-zinc-950">{{ __('Checkout Completed!') }}</h3>
-                <p class="text-xs text-zinc-500 mt-1">Invoice Reference: <span x-ref="shareBillTitle" class="font-mono font-bold text-zinc-800">{{ $this->completedSale?->invoice_no }}</span></p>
+                <p class="text-xs text-zinc-500 mt-1">Invoice Reference: <span x-ref="shareBillTitle" data-pdf-url="{{ $completedSaleId ? route('sales.pdf', $completedSaleId) : '' }}" class="font-mono font-bold text-zinc-800">{{ $this->completedSale?->invoice_no }}</span></p>
             </div>
 
             <div class="w-full border-t border-zinc-100 pt-4 flex flex-col gap-2">
@@ -2637,7 +2417,7 @@ new #[Title('POS Terminal')] class extends Component
 
                 <flux:button type="button" @click="shareBill()" x-bind:disabled="sharePreparing" variant="ghost" class="w-full border border-violet-100 bg-violet-50/70! text-violet-700!">
                     <flux:icon.share class="size-4 mr-1" />
-                    <span x-text="sharePreparing ? 'Preparing PDF...' : (shareCopied ? 'PDF Shared / Downloaded' : (sharePdfError ? 'Retry PDF Share' : 'Share PDF Bill'))">{{ __('Share PDF Bill') }}</span>
+                    <span x-text="sharePreparing ? 'Preparing PDF...' : (shareCopied ? 'Share / download opened' : (sharePdfError ? 'Retry PDF Share' : (sharePdfFile ? 'PDF ready — tap to share' : 'Share PDF Bill')))">{{ __('Share PDF Bill') }}</span>
                 </flux:button>
 
                 <!-- SMS confirmation trigger -->
@@ -2823,7 +2603,5 @@ Due: Rs {{ number_format($this->completedSale->due_amount, 2) }}
     @endif
 
     @assets
-    <script src="/vendor/pos-share/html2canvas-pro.min.js" defer></script>
-    <script src="/vendor/pos-share/jspdf.umd.min.js" defer></script>
     @endassets
 </div>

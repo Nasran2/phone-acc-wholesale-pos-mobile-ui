@@ -1,6 +1,8 @@
 <?php
 
+use App\Http\Controllers\CustomerLedgerPdfController;
 use App\Http\Controllers\DebugPasskeysController;
+use App\Http\Controllers\InvoicePdfController;
 use App\Http\Controllers\PublicBillController;
 use Illuminate\Support\Facades\Route;
 
@@ -14,6 +16,8 @@ Route::livewire('developer/dashboard', 'pages::developer.dashboard')
     ->name('developer.dashboard');
 
 Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('sales/{sale}/pdf', InvoicePdfController::class)->name('sales.pdf');
+    Route::get('parties/customers/{customer}/ledger.pdf', CustomerLedgerPdfController::class)->name('customers.ledger.pdf');
     Route::view('dashboard', 'dashboard')->name('dashboard');
 
     Route::livewire('products/categories', 'pages::products.categories')->name('products.categories');

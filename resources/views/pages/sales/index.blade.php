@@ -398,173 +398,17 @@ new #[Title('Sales Receipts')] class extends Component
     sharePdfUrl: null,
     init() {
         this.$watch('drawerOpen', (val) => {
-            if (!val) this.resetSharePdf();
+            this.resetSharePdf();
         });
     },
-    resetSharePdf() {
-        this.shareCopied = false;
-        this.sharePreparing = false;
-        this.sharePdfError = false;
-        this.sharePdfFile = null;
-        if (this.sharePdfUrl) {
-            URL.revokeObjectURL(this.sharePdfUrl);
-            this.sharePdfUrl = null;
-        }
-    },
-    async loadPdfScript(src, globalChecker) {
-        if (globalChecker()) return;
-        const existingScript = document.querySelector(`script[src='${src}']`);
-        if (existingScript) {
-            await new Promise((resolve, reject) => {
-                existingScript.addEventListener('load', resolve, { once: true });
-                existingScript.addEventListener('error', reject, { once: true });
-                setTimeout(resolve, 1200);
-            });
-            return;
-        }
-        await new Promise((resolve, reject) => {
-            const script = document.createElement('script');
-            const timeout = setTimeout(() => reject(new Error(`Timed out loading ${src}`)), 10000);
-            script.src = src;
-            script.onload = () => { clearTimeout(timeout); resolve(); };
-            script.onerror = () => { clearTimeout(timeout); reject(new Error(`Failed to load ${src}`)); };
-            document.head.appendChild(script);
-        });
-    },
+    resetSharePdf() { window.PosPdf.reset(this); },
+    destroy() { this.resetSharePdf(); },
     async prepareBillPdf() {
-        if (this.sharePreparing || this.sharePdfFile) return;
-
-        const invoiceNo = this.$refs.shareBillTitle?.innerText?.trim() || 'Invoice';
-        const a4El = document.getElementById('a4-invoice-template');
-        const isA4 = !!a4El;
-        const templateId = isA4 ? 'a4-invoice-template' : 'thermal-receipt-template';
-        const originalEl = document.getElementById(templateId);
-
-        if (!originalEl) {
-            this.sharePdfError = true;
-            return;
-        }
-
-        this.sharePreparing = true;
-        this.sharePdfError = false;
-
-        try {
-            await this.loadPdfScript('/vendor/pos-share/html2canvas-pro.min.js', () => typeof window.html2canvas !== 'undefined');
-            await this.loadPdfScript('/vendor/pos-share/jspdf.umd.min.js', () => typeof window.jsPDF !== 'undefined' || !!window.jspdf?.jsPDF);
-
-            if (window.jspdf?.jsPDF && typeof window.jsPDF === 'undefined') {
-                window.jsPDF = window.jspdf.jsPDF;
-            }
-
-            if (typeof window.html2canvas === 'undefined' || typeof window.jsPDF === 'undefined') {
-                throw new Error('PDF generator libraries are unavailable.');
-            }
-
-            const wrapper = document.createElement('div');
-            wrapper.style.position = 'fixed';
-            wrapper.style.top = '-9999px';
-            wrapper.style.left = '-9999px';
-
-            if (isA4) {
-                wrapper.style.width = '794px';
-                wrapper.style.minHeight = '1123px';
-            } else {
-                wrapper.style.width = '300px';
-            }
-
-            wrapper.style.background = 'white';
-            wrapper.style.zIndex = '-1';
-
-            const clonedEl = originalEl.cloneNode(true);
-            clonedEl.classList.remove('hidden', 'print:block');
-            clonedEl.style.display = 'block';
-
-            if (isA4) {
-                clonedEl.style.width = '794px';
-                clonedEl.style.height = 'auto';
-                clonedEl.style.minHeight = '1123px';
-                clonedEl.style.margin = '0';
-                clonedEl.style.padding = '0';
-
-                const invoicePage = clonedEl.firstElementChild;
-                if (invoicePage) {
-                    invoicePage.style.height = 'auto';
-                    invoicePage.style.minHeight = '1123px';
-                    invoicePage.style.overflow = 'visible';
-                }
-            }
-
-            wrapper.appendChild(clonedEl);
-            document.body.appendChild(wrapper);
-
-            const canvas = await html2canvas(clonedEl, {
-                scale: 2,
-                useCORS: true,
-                backgroundColor: '#ffffff',
-                logging: false,
-                windowWidth: isA4 ? 794 : 300,
-                width: isA4 ? 794 : 300,
-                height: isA4 ? clonedEl.scrollHeight : clonedEl.offsetHeight
-            });
-
-            document.body.removeChild(wrapper);
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.95);
-            const pdf = new window.jsPDF({
-                orientation: 'portrait',
-                unit: 'mm',
-                format: isA4 ? 'a4' : [80, (canvas.height * 80) / canvas.width]
-            });
-
-            const pdfWidth = pdf.internal.pageSize.getWidth();
-            const pageHeight = pdf.internal.pageSize.getHeight();
-            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-            let remainingHeight = pdfHeight;
-            let imageTop = 0;
-
-            pdf.addImage(imgData, 'JPEG', 0, imageTop, pdfWidth, pdfHeight);
-            remainingHeight -= pageHeight;
-
-            while (remainingHeight > 1) {
-                imageTop -= pageHeight;
-                pdf.addPage();
-                pdf.addImage(imgData, 'JPEG', 0, imageTop, pdfWidth, pdfHeight);
-                remainingHeight -= pageHeight;
-            }
-
-            const pdfBlob = pdf.output('blob');
-            this.sharePdfFile = new File([pdfBlob], `${invoiceNo}.pdf`, { type: 'application/pdf' });
-            this.sharePdfUrl = URL.createObjectURL(pdfBlob);
-        } catch (e) {
-            console.error('PDF Generation Error:', e);
-            this.sharePdfError = true;
-        } finally {
-            this.sharePreparing = false;
-        }
+        await window.PosPdf.prepare(this, this.$refs.shareBillTitle?.dataset.pdfUrl, this.$refs.shareBillTitle?.innerText?.trim() || 'Document');
     },
-    async sharePdfAction() {
-        if (!this.sharePdfFile) return;
+    downloadPdfFile() { window.PosPdf.download(this); },
+    async sharePdfAction() { await window.PosPdf.share(this); }
 
-        if (navigator.canShare && navigator.canShare({ files: [this.sharePdfFile] })) {
-            try {
-                await navigator.share({
-                    title: 'Invoice Receipt',
-                    text: 'Please find your invoice receipt attached.',
-                    files: [this.sharePdfFile]
-                });
-                return;
-            } catch (err) {
-                if (err.name !== 'AbortError') console.error('Share failed:', err);
-            }
-        }
-
-        const a = document.createElement('a');
-        a.href = this.sharePdfUrl;
-        a.download = this.sharePdfFile.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-    }
 }">
     <div class="flex flex-col gap-2">
         <h1 class="font-display text-2xl font-bold tracking-tight text-zinc-950">{{ __('Sales Invoices & Returns') }}</h1>
@@ -702,7 +546,7 @@ new #[Title('Sales Receipts')] class extends Component
                 <!-- Drawer Header -->
                 <div class="flex items-center justify-between border-b border-zinc-100 p-5 bg-zinc-50/50">
                     <div>
-                        <h3 class="font-display font-bold text-zinc-950" x-ref="shareBillTitle">
+                        <h3 class="font-display font-bold text-zinc-950" x-ref="shareBillTitle" data-pdf-url="{{ $viewingSaleId ? route('sales.pdf', $viewingSaleId) : '' }}">
                             {{ $this->selectedSale->invoice_no }}
                         </h3>
                         <p class="text-xs text-zinc-500 mt-1">{{ __('Retail Receipt Audit View') }}</p>
@@ -877,7 +721,7 @@ new #[Title('Sales Receipts')] class extends Component
                                         <flux:icon.share class="size-3 mr-1" />
                                         Share
                                     </flux:button>
-                                    <flux:button as="a" x-bind:href="sharePdfUrl" x-bind:download="$refs.shareBillTitle?.innerText?.trim() + '.pdf'" variant="ghost" size="sm">
+                                    <flux:button as="a" @click.prevent="downloadPdfFile()" href="#" variant="ghost" size="sm">
                                         <flux:icon.arrow-down-tray class="size-3" />
                                     </flux:button>
                                 </div>
@@ -885,7 +729,7 @@ new #[Title('Sales Receipts')] class extends Component
                         </div>
 
                         <div x-show="sharePdfError" x-collapse class="mt-2 rounded-2xl bg-rose-50 border border-rose-100 p-3 text-xs text-rose-600">
-                            Failed to generate PDF. Make sure you are using a modern browser.
+                            PDF could not be prepared. Check your connection and try again. Your saved records are safe.
                         </div>
                     </div>
                 </div>

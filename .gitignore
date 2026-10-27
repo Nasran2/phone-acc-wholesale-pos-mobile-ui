@@ -34,3 +34,8 @@ yarn-error.log
 /.codex
 /.gemini
 .DS_Store
+
+/outputs/android-webview/.gradle
+/outputs/android-webview/app/build
+/outputs/android-webview/build
+/outputs/android-webview/local.properties

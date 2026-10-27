@@ -69,6 +69,9 @@
 }
 
 @layer base {
+    html { overscroll-behavior-y: contain; -webkit-text-size-adjust: 100%; }
+    body { min-width: 320px; }
+    [x-cloak] { display: none !important; }
 
     *,
     ::after,
@@ -77,6 +80,32 @@
     ::file-selector-button {
         border-color: var(--color-gray-200, currentColor);
     }
+}
+
+.pull-refresh-indicator {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 12px);
+    left: 50%;
+    transform: translate(-50%, -160%);
+    z-index: 9999;
+    padding: 12px 20px;
+    border-radius: 999px;
+    background: #08235d;
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 4px 20px #08235d33;
+    transition: transform 180ms ease;
+    pointer-events: none;
+}
+.pull-refresh-indicator[data-visible='true'] { transform: translate(-50%, 0); }
+
+@media (pointer: coarse) {
+    input:not([type='checkbox'], [type='radio']), select, textarea { font-size: 16px; }
+    button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
 [data-flux-field]:not(ui-radio, ui-checkbox) {
