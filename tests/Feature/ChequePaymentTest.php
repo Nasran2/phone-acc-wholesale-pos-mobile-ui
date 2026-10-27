@@ -437,3 +437,40 @@ test('sales due payment can be recorded as a cheque hold', function () {
         ->and((float) $sale->paid_amount)->toBe(400.0)
         ->and((float) $customer->refresh()->due_balance)->toBe(0.0);
 });
+
+test('a passed supplier invoice cheque can be returned and passed again without losing invoice balances', function () {
+    [$supplier, $purchase, $payment] = createChequePurchase(today()->toDateString());
+    $service = app(ChequePaymentService::class);
+    $service->pass($payment);
+    $service->markReturned($payment);
+    $service->markReturned($payment);
+    expect($payment->refresh()->cheque_status)->toBe('returned')
+        ->and((float) $purchase->refresh()->paid_amount)->toBe(0.0)
+        ->and((float) $purchase->due_amount)->toBe(1000.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(1000.0);
+    $service->pass($payment);
+    expect($payment->refresh()->cheque_status)->toBe('passed')
+        ->and((float) $purchase->refresh()->paid_amount)->toBe(1000.0)
+        ->and((float) $purchase->due_amount)->toBe(0.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(0.0);
+});
+
+test('a passed party invoice cheque bounce restores both customer and supplier balances once', function () {
+    [$customer, $sale, $source] = createChequeSale(today()->toDateString());
+    [$supplier, $purchase, $payment] = createChequePurchase(today()->toDateString(), 'party', $source);
+    $service = app(ChequePaymentService::class);
+    $service->pass($payment);
+    $service->markReturned($payment);
+    $service->markReturned($payment);
+    expect($source->refresh()->cheque_status)->toBe('returned')
+        ->and((float) $sale->refresh()->paid_amount)->toBe(0.0)
+        ->and((float) $sale->due_amount)->toBe(1000.0)
+        ->and((float) $customer->refresh()->due_balance)->toBe(1000.0)
+        ->and((float) $purchase->refresh()->paid_amount)->toBe(0.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(1000.0);
+    $service->pass($payment);
+    expect((float) $sale->refresh()->paid_amount)->toBe(1000.0)
+        ->and((float) $customer->refresh()->due_balance)->toBe(0.0)
+        ->and((float) $purchase->refresh()->paid_amount)->toBe(1000.0)
+        ->and((float) $supplier->refresh()->due_balance)->toBe(0.0);
+});

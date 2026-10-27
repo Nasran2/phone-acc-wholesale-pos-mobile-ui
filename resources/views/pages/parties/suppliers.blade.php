@@ -309,7 +309,7 @@ new #[Title('Manage Suppliers')] class extends Component
                 'ref' => $pm->reference ?: 'PAY-' . $pm->id,
                 'description' => "Payoff Remitted (" . strtoupper($pm->payment_method) . ")",
                 'credit' => 0,
-                'debit' => $pm->amount,
+                'debit' => $pm->supplier_deduction_amount ?? $pm->amount,
                 'cheque_status' => $pm->payment_method === 'cheque' ? $pm->cheque_status : null,
                 'raw_date' => $pm->created_at,
             ]);

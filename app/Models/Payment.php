@@ -9,16 +9,15 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use App\Models\Customer;
-use App\Models\Sale;
 
-#[Fillable(['paymentable_type', 'paymentable_id', 'amount', 'payment_method', 'date', 'reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'cheque_status', 'cheque_type', 'cheque_processed_at', 'source_payment_id', 'party_customer_id', 'notes'])]
+#[Fillable(['paymentable_type', 'paymentable_id', 'amount', 'payment_method', 'date', 'reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'cheque_status', 'cheque_type', 'cheque_processed_at', 'source_payment_id', 'party_customer_id', 'supplier_deduction_amount', 'notes'])]
 class Payment extends Model
 {
     protected function casts(): array
     {
         return [
             'amount' => 'decimal:2',
+            'supplier_deduction_amount' => 'decimal:2',
             'date' => 'date',
             'cheque_date' => 'date',
             'cheque_processed_at' => 'datetime',
@@ -66,6 +65,7 @@ class Payment extends Model
         if ($this->paymentable instanceof Customer) {
             return $this->paymentable->name ?? __('Unknown Customer');
         }
+
         return __('Unknown Customer');
     }
 }

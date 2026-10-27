@@ -10,18 +10,102 @@ use App\Models\Sale;
 use App\Models\Supplier;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class ChequePaymentService
 {
     public function __construct(private SmsNotificationService $smsNotificationService) {}
+
+    public function assignSupplier(Payment $payment, int $supplierId): Payment
+    {
+        return DB::transaction(function () use ($payment, $supplierId): Payment {
+            $payment = $this->lockCheque($payment);
+            $owner = $payment->paymentable;
+            if ($payment->payment_method !== 'cheque' || ! ($owner instanceof Sale || $owner instanceof Customer || $owner instanceof Supplier)) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('Only customer cheques and supplier account cheques can be assigned here. Invoice cheques belong to their purchase supplier.')]);
+            }
+            if ($owner instanceof Supplier && $owner->id === $supplierId) {
+                return $payment;
+            }
+            if (! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true) || (float) $payment->amount <= 0) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('This cheque has an invalid status or amount.')]);
+            }
+            if (! $owner instanceof Supplier && $payment->issuedPayments()->exists()) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('This cheque has already been issued. Refresh the report and edit the supplier cheque instead.')]);
+            }
+
+            $suppliers = Supplier::withTrashed()->whereIn('id', [$supplierId, $owner instanceof Supplier ? $owner->id : $supplierId])
+                ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $newSupplier = $suppliers->get($supplierId);
+            if (! $newSupplier || $newSupplier->trashed()) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('Please choose an active supplier.')]);
+            }
+            $deduction = $payment->cheque_status === 'passed' ? (float) $payment->amount : 0.0;
+            if ($deduction > 0 && $deduction > (float) $newSupplier->due_balance) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('The cheque amount exceeds this supplier’s outstanding due.')]);
+            }
+
+            $oldSupplierName = $owner instanceof Supplier ? $owner->name : __('None');
+            if ($owner instanceof Supplier) {
+                $oldDeduction = $payment->supplier_deduction_amount !== null
+                    ? (float) $payment->supplier_deduction_amount
+                    : ($payment->cheque_status === 'returned' ? 0.0 : (float) $payment->amount);
+                $suppliers[$owner->id]->increment('due_balance', $oldDeduction);
+                $payment->paymentable()->associate($newSupplier);
+                $payment->supplier_deduction_amount = $deduction;
+                $payment->save();
+            } else {
+                $sourcePayment = $payment;
+                $payment = $newSupplier->payments()->create([
+                    ...$sourcePayment->only(['amount', 'payment_method', 'date', 'reference', 'cheque_bank', 'cheque_no', 'cheque_date', 'cheque_status', 'cheque_processed_at']),
+                    'cheque_type' => 'party', 'source_payment_id' => $sourcePayment->id,
+                    'party_customer_id' => $owner instanceof Customer ? $owner->id : $owner->customer_id,
+                    'supplier_deduction_amount' => $deduction,
+                    'notes' => __('Customer cheque assigned to supplier; supplier due is reduced only when passed.'),
+                ]);
+            }
+            if ($deduction > 0) {
+                $newSupplier->decrement('due_balance', $deduction);
+            }
+            ActivityLogger::log('cheque_supplier_changed', __('Cheque :number (Rs :amount): supplier changed from :old to :new.', [
+                'number' => $payment->cheque_no ?: $payment->reference, 'amount' => $payment->amount,
+                'old' => $oldSupplierName, 'new' => $newSupplier->name,
+            ]));
+
+            return $payment->refresh();
+        }, 3);
+    }
+
+    /** @param array{amount: string, cheque_no: string, reference: string, cheque_bank: string, cheque_date: string} $details */
+    public function updateDetails(Payment $payment, array $details): Payment
+    {
+        return DB::transaction(function () use ($payment, $details): Payment {
+            $payment = $this->lockCheque($payment);
+            if ($payment->payment_method !== 'cheque') {
+                throw ValidationException::withMessages(['editAmount' => __('Please select a cheque payment.')]);
+            }
+            if (round((float) $details['amount'], 2) !== (float) $payment->amount) {
+                throw ValidationException::withMessages(['editAmount' => __('The amount cannot be changed here because it affects account balances. Correct it through the original payment or invoice.')]);
+            }
+            $payment->update($details);
+            $payment->sourcePayment?->update(Arr::except($details, ['amount']));
+
+            return $payment->refresh();
+        });
+    }
 
     public function pass(Payment $payment): Payment
     {
         $notifyPaymentIds = [];
 
         $passedPayment = DB::transaction(function () use ($payment, &$notifyPaymentIds) {
-            $payment->refresh();
+            $payment = $this->lockCheque($payment);
+
+            if ($payment->payment_method === 'cheque' && $payment->cheque_status === 'returned') {
+                $payment = $this->revertToPending($payment);
+            }
 
             if ($payment->payment_method !== 'cheque' || $payment->cheque_status !== 'pending') {
                 return $payment;
@@ -65,6 +149,7 @@ class ChequePaymentService
                 // Supplier due balance already reduced on cheque creation; no extra sync needed.
             }
 
+            $this->syncAssignedSupplierDeduction($payment, 'passed');
             $payment->update([
                 'cheque_status' => 'passed',
                 'cheque_processed_at' => now(),
@@ -97,12 +182,17 @@ class ChequePaymentService
     public function markReturned(Payment $payment): Payment
     {
         return DB::transaction(function () use ($payment) {
-            $payment->refresh();
+            $payment = $this->lockCheque($payment);
+
+            if ($payment->payment_method === 'cheque' && $payment->cheque_status === 'passed') {
+                $payment = $this->revertToPending($payment);
+            }
 
             if ($payment->payment_method !== 'cheque' || $payment->cheque_status !== 'pending') {
                 return $payment;
             }
 
+            $this->syncAssignedSupplierDeduction($payment, 'returned');
             $payment->update([
                 'cheque_status' => 'returned',
                 'cheque_processed_at' => now(),
@@ -145,7 +235,7 @@ class ChequePaymentService
             }
 
             $supplier = $payment->paymentable;
-            if ($supplier instanceof Supplier) {
+            if ($supplier instanceof Supplier && $payment->supplier_deduction_amount === null) {
                 $supplier->update([
                     'due_balance' => round(max(0, (float) $supplier->due_balance + (float) $payment->amount), 2),
                 ]);
@@ -158,13 +248,14 @@ class ChequePaymentService
     public function revertToPending(Payment $payment): Payment
     {
         return DB::transaction(function () use ($payment) {
-            $payment->refresh();
+            $payment = $this->lockCheque($payment);
 
             if ($payment->payment_method !== 'cheque' || $payment->cheque_status === 'pending') {
                 return $payment;
             }
 
             $oldStatus = $payment->cheque_status;
+            $this->syncAssignedSupplierDeduction($payment, 'pending');
 
             if ($oldStatus === 'passed') {
                 $sale = $payment->paymentable;
@@ -206,7 +297,7 @@ class ChequePaymentService
                     ]);
                 }
                 $supplier = $payment->paymentable;
-                if ($supplier instanceof Supplier) {
+                if ($supplier instanceof Supplier && $payment->supplier_deduction_amount === null) {
                     $supplier->update([
                         'due_balance' => round(max(0, (float) $supplier->due_balance - (float) $payment->amount), 2),
                     ]);
@@ -261,11 +352,49 @@ class ChequePaymentService
             ->with('paymentable')
             ->orderBy('cheque_date')
             ->each(function (Payment $payment) use (&$processed) {
-                $this->pass($payment);
-                $processed++;
+                try {
+                    $passed = $this->pass($payment);
+                    $processed += $passed->cheque_status === 'passed' ? 1 : 0;
+                } catch (ValidationException) {
+                    return;
+                }
             });
 
         return $processed;
+    }
+
+    private function lockCheque(Payment $payment): Payment
+    {
+        $sourceId = Payment::query()->whereKey($payment->id)->value('source_payment_id');
+        if ($sourceId) {
+            Payment::query()->lockForUpdate()->findOrFail($sourceId);
+        }
+        $payment = Payment::query()->lockForUpdate()->findOrFail($payment->id);
+        if (! $payment->source_payment_id) {
+            $assignedPayment = $payment->issuedPayments()->whereNotNull('supplier_deduction_amount')->lockForUpdate()->first();
+            if ($assignedPayment) {
+                return $assignedPayment;
+            }
+        }
+
+        return $payment;
+    }
+
+    private function syncAssignedSupplierDeduction(Payment $payment, string $status): void
+    {
+        if ($payment->supplier_deduction_amount === null || ! $payment->paymentable instanceof Supplier) {
+            return;
+        }
+        $supplier = Supplier::withTrashed()->lockForUpdate()->findOrFail($payment->paymentable_id);
+        $deduction = $status === 'passed' ? (float) $payment->amount : 0.0;
+        $difference = round($deduction - (float) $payment->supplier_deduction_amount, 2);
+        if ($difference > (float) $supplier->due_balance && $difference > 0) {
+            throw ValidationException::withMessages(['cheque' => __('The cheque amount exceeds the supplier’s outstanding due. Change the supplier or correct their balance before passing it.')]);
+        }
+        if ($difference !== 0.0) {
+            $supplier->decrement('due_balance', $difference);
+        }
+        $payment->update(['supplier_deduction_amount' => $deduction]);
     }
 
     public function autoPassOverdueOwnSupplierCheques(?CarbonInterface $today = null): int
@@ -282,8 +411,12 @@ class ChequePaymentService
             ->with('paymentable')
             ->orderBy('cheque_date')
             ->each(function (Payment $payment) use (&$processed): void {
-                $this->pass($payment);
-                $processed++;
+                try {
+                    $passed = $this->pass($payment);
+                    $processed += $passed->cheque_status === 'passed' ? 1 : 0;
+                } catch (ValidationException) {
+                    return;
+                }
             });
 
         return $processed;

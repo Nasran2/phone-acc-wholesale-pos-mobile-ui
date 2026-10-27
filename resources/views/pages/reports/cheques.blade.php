@@ -1,9 +1,13 @@
 <?php
 
+use App\Models\Customer;
 use App\Models\Payment;
+use App\Models\Sale;
+use App\Models\Supplier;
 use App\Services\ChequePaymentService;
 use Flux\Flux;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\Locked;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -17,6 +21,46 @@ new #[Title('Cheque Report')] class extends Component
     public ?string $supplierId = null;
     public ?string $startDate = null;
     public ?string $endDate = null;
+    #[Locked]
+    public ?int $assignPaymentId = null;
+    public ?string $assignedSupplierId = null;
+    #[Locked]
+    public string $assignChequeAmount = '';
+    #[Locked]
+    public string $assignChequeStatus = '';
+
+    #[Computed]
+    public function canManageCheques(): bool
+    {
+        return auth()->user()?->hasPermission('view_accounting') ?? false;
+    }
+
+    public function assignChequeSupplier(int $paymentId): void
+    {
+        abort_unless($this->canManageCheques, 403);
+        $payment = Payment::query()->where('payment_method', 'cheque')->findOrFail($paymentId);
+        abort_unless($payment->paymentable instanceof Sale || $payment->paymentable instanceof Customer || $payment->paymentable instanceof Supplier, 403);
+        $this->assignPaymentId = $payment->id;
+        $this->assignedSupplierId = $payment->paymentable instanceof Supplier ? (string) $payment->paymentable_id : null;
+        $this->assignChequeAmount = $payment->amount;
+        $this->assignChequeStatus = $payment->cheque_status;
+        $this->resetValidation();
+        Flux::modal('assign-cheque-supplier')->show();
+    }
+
+    public function saveChequeSupplier(ChequePaymentService $service): void
+    {
+        abort_unless($this->canManageCheques, 403);
+        $this->validate(['assignedSupplierId' => ['required', 'integer']]);
+        $payment = Payment::query()->where('payment_method', 'cheque')->findOrFail($this->assignPaymentId);
+        $service->assignSupplier($payment, (int) $this->assignedSupplierId);
+        unset($this->cheques, $this->suppliers);
+        $this->resetPage();
+        $this->reset('assignPaymentId', 'assignedSupplierId', 'assignChequeAmount', 'assignChequeStatus');
+        Flux::modal('assign-cheque-supplier')->close();
+        Flux::toast(variant: 'success', text: __('Cheque supplier updated and balances adjusted.'));
+        $this->dispatch('cheque-updated');
+    }
 
     public function updatingSearch() { $this->resetPage(); }
     public function updatingStatus() { $this->resetPage(); }
@@ -30,10 +74,11 @@ new #[Title('Cheque Report')] class extends Component
     public string $editChequeBank = '';
     public string $editChequeDate = '';
 
-    public function editCheque(int $paymentId)
+    public function editCheque(int $paymentId): void
     {
+        abort_unless($this->canManageCheques, 403);
         $this->editPaymentId = $paymentId;
-        $payment = Payment::query()->findOrFail($paymentId);
+        $payment = Payment::query()->where('payment_method', 'cheque')->findOrFail($paymentId);
         
         $this->editAmount = $payment->amount;
         $this->editChequeNo = $payment->cheque_no ?: ($payment->reference ?: '');
@@ -44,8 +89,9 @@ new #[Title('Cheque Report')] class extends Component
         Flux::modal('edit-cheque')->show();
     }
 
-    public function updateCheque()
+    public function updateCheque(ChequePaymentService $service): void
     {
+        abort_unless($this->canManageCheques, 403);
         $this->validate([
             'editAmount' => 'required|numeric|min:0',
             'editChequeNo' => 'required|string|max:255',
@@ -63,32 +109,31 @@ new #[Title('Cheque Report')] class extends Component
             'cheque_date' => $this->editChequeDate,
         ];
 
-        $payment->update($data);
-
-        if ($payment->sourcePayment) {
-            $payment->sourcePayment->update($data);
-        }
+        $service->updateDetails($payment, $data);
 
         Flux::modal('edit-cheque')->close();
         Flux::toast(variant: 'success', text: __('Cheque details updated successfully.'));
     }
 
-    public function markAsPassed(int $paymentId, ChequePaymentService $service)
+    public function markAsPassed(int $paymentId, ChequePaymentService $service): void
     {
+        abort_unless($this->canManageCheques, 403);
         $payment = Payment::query()->findOrFail($paymentId);
         $service->pass($payment);
         Flux::toast(variant: 'success', text: __('Cheque marked as passed.'));
     }
 
-    public function markAsReturned(int $paymentId, ChequePaymentService $service)
+    public function markAsReturned(int $paymentId, ChequePaymentService $service): void
     {
+        abort_unless($this->canManageCheques, 403);
         $payment = Payment::query()->findOrFail($paymentId);
         $service->markReturned($payment);
         Flux::toast(variant: 'danger', text: __('Cheque marked as returned.'));
     }
 
-    public function markAsPending(int $paymentId, ChequePaymentService $service)
+    public function markAsPending(int $paymentId, ChequePaymentService $service): void
     {
+        abort_unless($this->canManageCheques, 403);
         $payment = Payment::query()->findOrFail($paymentId);
         $service->revertToPending($payment);
         Flux::toast(variant: 'success', text: __('Cheque reverted to pending status.'));
@@ -226,6 +271,8 @@ new #[Title('Cheque Report')] class extends Component
         <p class="text-sm text-zinc-500">{{ __('Monitor and manage all incoming and outgoing cheques, and update their statuses.') }}</p>
     </div>
 
+    <flux:error name="cheque" />
+
     <!-- Filters -->
     <div class="app-card p-4 grid gap-4 sm:grid-cols-2 md:grid-cols-5">
         <flux:input wire:model.live.debounce.300ms="search" placeholder="Search cheque no or bank..." />
@@ -290,9 +337,13 @@ new #[Title('Cheque Report')] class extends Component
                                 @endif
                             </td>
                             <td class="px-4 py-3 text-right">
+                                @if ($this->canManageCheques)
                                 <flux:dropdown>
                                     <flux:button size="sm" variant="ghost" icon="ellipsis-vertical" />
                                     <flux:navmenu>
+                                        @if ($pm->paymentable instanceof Sale || $pm->paymentable instanceof Customer || $pm->paymentable instanceof Supplier)
+                                            <flux:navmenu.item wire:click="assignChequeSupplier({{ $pm->id }})">{{ $pm->paymentable instanceof Supplier ? __('Change supplier') : __('Assign supplier') }}</flux:navmenu.item>
+                                        @endif
                                         <flux:navmenu.item wire:click="editCheque({{ $pm->id }})" icon="pencil" class="text-zinc-600">Edit Details</flux:navmenu.item>
                                         @if ($pm->cheque_status !== 'passed')
                                             <flux:navmenu.item wire:click="markAsPassed({{ $pm->id }})" icon="check-circle" class="text-emerald-600">Mark Passed</flux:navmenu.item>
@@ -305,6 +356,7 @@ new #[Title('Cheque Report')] class extends Component
                                         @endif
                                     </flux:navmenu>
                                 </flux:dropdown>
+                                @endif
                             </td>
                         </tr>
                     @empty
@@ -329,7 +381,7 @@ new #[Title('Cheque Report')] class extends Component
             </div>
             
             <div class="space-y-4">
-                <flux:input wire:model="editAmount" label="Amount" type="number" step="0.01" />
+                <flux:input wire:model="editAmount" label="Amount" type="number" step="0.01" readonly description="{{ __('Correct amounts through the original payment or invoice so account balances stay accurate.') }}" />
                 <flux:input wire:model="editChequeNo" label="Cheque No / Reference" />
                 <flux:input wire:model="editChequeBank" label="Bank Name" />
                 <flux:input wire:model="editChequeDate" label="Cheque Date" type="date" />
@@ -342,5 +394,28 @@ new #[Title('Cheque Report')] class extends Component
                 <flux:button wire:click="updateCheque" variant="primary">Save Changes</flux:button>
             </div>
         </div>
+    </flux:modal>
+
+    <flux:modal name="assign-cheque-supplier" class="md:w-96">
+        <form wire:submit="saveChequeSupplier" class="space-y-5">
+            <div>
+                <flux:heading size="lg">{{ __('Assign or change supplier') }}</flux:heading>
+                <flux:text>{{ __('Cheque amount: Rs :amount', ['amount' => number_format((float) $assignChequeAmount, 2)]) }}</flux:text>
+            </div>
+            <flux:select wire:model="assignedSupplierId" label="{{ __('Supplier') }}" placeholder="{{ __('Choose supplier') }}">
+                @foreach ($this->suppliers as $supplier)
+                    <option value="{{ $supplier->id }}" wire:key="assign-cheque-supplier-{{ $supplier->id }}">{{ $supplier->name }} · {{ __('Due: Rs :amount', ['amount' => number_format((float) $supplier->due_balance, 2)]) }}</option>
+                @endforeach
+            </flux:select>
+            @if ($assignChequeStatus === 'passed')
+                <flux:text>{{ __('This cheque has passed. Saving reduces the selected supplier’s due. When changing supplier, the previous deduction is restored first.') }}</flux:text>
+            @else
+                <flux:text>{{ __('Pending and returned cheques do not reduce supplier due. The amount is deducted only when the cheque is marked Passed.') }}</flux:text>
+            @endif
+            <div class="flex justify-end gap-2">
+                <flux:modal.close><flux:button type="button" variant="ghost">{{ __('Cancel') }}</flux:button></flux:modal.close>
+                <flux:button type="submit" variant="primary" wire:loading.attr="disabled" wire:target="saveChequeSupplier">{{ __('Save supplier') }}</flux:button>
+            </div>
+        </form>
     </flux:modal>
 </div>

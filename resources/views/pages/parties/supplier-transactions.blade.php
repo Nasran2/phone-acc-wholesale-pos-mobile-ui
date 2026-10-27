@@ -171,7 +171,7 @@ new #[Title('Supplier Transactions')] class extends Component
                 'cheque_status' => $payment->cheque_status,
                 'status' => $payment->cheque_status ?: __('paid'),
                 'credit' => 0.00,
-                'debit' => (float) $payment->amount,
+                'debit' => (float) ($payment->supplier_deduction_amount ?? $payment->amount),
                 'pending_amount' => null,
                 'reference' => $payment->reference,
                 'cheque_no' => $payment->cheque_no,
