@@ -148,6 +148,15 @@ new #[Title('Manage Customers')] class extends Component
         Flux::toast(variant: 'success', text: __('Payment deleted and its balance effects reversed.'));
     }
 
+    public function syncCustomerBalance(int $customerId): void
+    {
+        abort_unless(auth()->user()?->hasPermission('view_accounting'), 403);
+        $customer = Customer::query()->findOrFail($customerId);
+        $customer->recalculateDueBalance();
+        unset($this->selectedCustomer, $this->selectedCustomerLedger, $this->customers, $this->totalDueBalance, $this->customersWithDue);
+        Flux::toast(variant: 'success', text: __('Customer balance recalculated and synchronized with ledger transactions.'));
+    }
+
     public function closeLedger(): void
     {
         $this->selectedCustomerId = null;
@@ -652,7 +661,17 @@ new #[Title('Manage Customers')] class extends Component
                 <!-- Customer Quick Info Card -->
                 <div class="grid grid-cols-2 gap-4 rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
                     <div>
-                        <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider block">{{ __('Outstanding Receivables') }}</span>
+                        <div class="flex items-center justify-between">
+                            <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider block">{{ __('Outstanding Receivables') }}</span>
+                            @if (auth()->user()?->hasPermission('view_accounting'))
+                                <button type="button" wire:click="syncCustomerBalance({{ $this->selectedCustomer?->id }})"
+                                    class="text-[10px] font-bold text-violet-600 hover:text-violet-700 hover:underline flex items-center gap-1"
+                                    title="{{ __('Recalculate and synchronize customer due balance with all invoices and payments') }}">
+                                    <flux:icon.arrow-path class="size-3" />
+                                    {{ __('Sync') }}
+                                </button>
+                            @endif
+                        </div>
                         <span class="text-lg font-bold text-zinc-900">
                             Rs {{ number_format($this->selectedCustomer?->due_balance ?? 0, 2) }}
                         </span>
@@ -787,9 +806,10 @@ new #[Title('Manage Customers')] class extends Component
                                         <div class="min-w-0">
                                             <div class="flex flex-wrap items-center gap-2">
                                                 @php
+                                                    $isReturned = ($row['cheque_status'] ?? null) === 'returned' || ($row['payment_status'] ?? null) === 'returned';
                                                     $invoiceStatus = $row['invoice_status'] ?? null;
                                                     $invoiceDue = (float) ($row['invoice_due'] ?? 0);
-                                                    $paymentTone = $invoiceStatus === 'paid' ? 'emerald' : ($invoiceStatus ? 'rose' : 'zinc');
+                                                    $paymentTone = $isReturned ? 'rose' : ($invoiceStatus === 'paid' ? 'emerald' : ($invoiceStatus ? 'rose' : 'zinc'));
                                                 @endphp
                                                 <flux:badge size="sm" :color="$paymentTone">{{ $row['badge'] }}</flux:badge>
                                                 <span class="text-xs font-semibold text-zinc-400">{{ __('Bill No') }}: {{ $row['bill_no'] }}</span>
@@ -809,7 +829,7 @@ new #[Title('Manage Customers')] class extends Component
                                             @if ($row['ref'] && $row['ref'] !== $row['bill_no'])
                                                 <p class="mt-1 text-[11px] text-zinc-400">{{ __('Reference') }}: {{ $row['ref'] }}</p>
                                             @endif
-                                            @if ($invoiceStatus)
+                                            @if ($invoiceStatus && ! $isReturned)
                                                 <p class="mt-1 text-[11px] font-semibold text-zinc-500">
                                                     {{ __('Invoice Status') }}: {{ strtoupper((string) $invoiceStatus) }}
                                                     @if ($invoiceDue > 0)
@@ -817,7 +837,7 @@ new #[Title('Manage Customers')] class extends Component
                                                     @endif
                                                 </p>
                                             @endif
-                                            @if (! empty($row['cheque_no']) || ! empty($row['purchase_invoice_no']))
+                                            @if (! empty($row['cheque_no']) || ! empty($row['cheque_bank']) || ! empty($row['cheque_date']) || ! empty($row['cheque_status']) || ! empty($row['purchase_invoice_no']))
                                                 <div class="mt-2 rounded-xl bg-zinc-50 p-3 text-[11px] font-semibold text-zinc-500">
                                                     @if (! empty($row['cheque_no']))
                                                         <p>{{ __('Cheque No') }}: <span class="text-zinc-800">{{ $row['cheque_no'] }}</span></p>
@@ -828,6 +848,9 @@ new #[Title('Manage Customers')] class extends Component
                                                     @if (! empty($row['cheque_date']))
                                                         <p>{{ __('Cheque Date') }}: <span class="text-zinc-800">{{ $row['cheque_date']->format('Y-m-d') }}</span></p>
                                                     @endif
+                                                    @if (! empty($row['cheque_status']))
+                                                        <p>{{ __('Cheque Status') }}: <span class="{{ $isReturned ? 'text-rose-600 font-bold' : 'text-zinc-800' }}">{{ strtoupper((string) $row['cheque_status']) }}</span></p>
+                                                    @endif
                                                     @if (! empty($row['purchase_invoice_no']))
                                                         <p>{{ __('Supplier Bill') }}: <span class="text-zinc-800">{{ $row['purchase_invoice_no'] }}</span> @if (! empty($row['supplier_name'])) · {{ $row['supplier_name'] }} @endif</p>
                                                     @endif
@@ -835,8 +858,13 @@ new #[Title('Manage Customers')] class extends Component
                                             @endif
                                         </div>
                                         <div class="shrink-0 text-left sm:text-right">
-                                            <span class="text-sm font-bold text-emerald-600">- Rs {{ number_format($row['credit'], 2) }}</span>
-                                            <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $invoiceStatus ? strtoupper((string) $invoiceStatus) : $row['payment_status'] }}</p>
+                                            @if ($isReturned)
+                                                <span class="text-sm font-bold text-rose-600 line-through">Rs {{ number_format($row['amount'] ?? $row['credit'], 2) }}</span>
+                                                <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-rose-600">{{ __('RETURNED') }}</p>
+                                            @else
+                                                <span class="text-sm font-bold text-emerald-600">- Rs {{ number_format($row['credit'], 2) }}</span>
+                                                <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $invoiceStatus ? strtoupper((string) $invoiceStatus) : $row['payment_status'] }}</p>
+                                            @endif
                                             @if (! empty($row['payment_id']) && auth()->user()?->hasPermission('view_accounting'))
                                                 <flux:button type="button" variant="ghost" size="sm" icon="trash" class="mt-2 text-rose-600"
                                                     wire:click="deletePayment({{ $row['payment_id'] }})"
@@ -1223,6 +1251,7 @@ new #[Title('Manage Customers')] class extends Component
         </thead>
         <tbody class="divide-y divide-zinc-100">
             @forelse($this->selectedCustomerLedger as $row)
+                @php($isReturned = ($row['cheque_status'] ?? null) === 'returned' || ($row['payment_status'] ?? null) === 'returned')
                 <tr>
                     <td class="py-3 px-2 whitespace-nowrap">{{ $row['bill_date']?->format('Y-m-d') ?? '-' }}</td>
                     <td class="py-3 px-2 whitespace-nowrap">{{ $row['paid_date']?->format('Y-m-d') ?? '-' }}</td>
@@ -1232,12 +1261,19 @@ new #[Title('Manage Customers')] class extends Component
                         @if ($row['payment_method'])
                             <span class="text-zinc-400">({{ strtoupper((string) $row['payment_method']) }})</span>
                         @endif
+                        @if ($isReturned)
+                            <span class="ml-1 text-xs font-bold text-rose-600">· {{ __('RETURNED') }}</span>
+                        @endif
                     </td>
                     <td class="py-3 px-2 text-right text-rose-600 font-medium">
                         {{ $row['debit'] > 0 ? number_format($row['debit'], 2) : '-' }}
                     </td>
-                    <td class="py-3 px-2 text-right text-emerald-600 font-medium">
-                        {{ $row['credit'] > 0 ? number_format($row['credit'], 2) : '-' }}
+                    <td class="py-3 px-2 text-right font-medium {{ $isReturned ? 'text-rose-600 line-through' : 'text-emerald-600' }}">
+                        @if ($isReturned)
+                            Rs {{ number_format($row['amount'] ?? 0, 2) }}
+                        @else
+                            {{ $row['credit'] > 0 ? number_format($row['credit'], 2) : '-' }}
+                        @endif
                     </td>
                 </tr>
             @empty

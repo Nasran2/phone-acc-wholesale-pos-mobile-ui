@@ -45,7 +45,8 @@ class ChequePaymentService
                 return;
             }
             $isCheque = $payment->payment_method === 'cheque';
-            if ((! $isCheque && (($customerId === null && $supplierId === null) || ! in_array($payment->payment_method, ['cash', 'card', 'bank_transfer', 'qr'], true)))
+            $method = strtolower(str_replace(['-', ' '], '_', trim((string) $payment->payment_method)));
+            if ((! $isCheque && (($customerId === null && $supplierId === null) || ! in_array($method, ['cash', 'card', 'bank_transfer', 'bank', 'qr'], true)))
                 || ($isCheque && ! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true))
                 || (float) $payment->amount <= 0) {
                 throw ValidationException::withMessages(['cheque' => match (true) {

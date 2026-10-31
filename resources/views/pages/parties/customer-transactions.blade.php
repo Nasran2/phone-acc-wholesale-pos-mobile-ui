@@ -163,49 +163,63 @@ new #[Title('Customer Transactions')] class extends Component
             ->where('customer_id', $this->selectedCustomerId)
             ->get();
 
-        $salePayments = $sales->flatMap(fn (Sale $sale) => $sale->payments->map(fn (Payment $payment): array => [
-            'type' => 'payment',
-            'label' => __('Invoice Payment'),
-            'date' => $payment->date,
-            'invoice_no' => $sale->invoice_no,
-            'invoice_id' => $sale->id,
-            'description' => __('Payment received for invoice'),
-            'payment_method' => $payment->payment_method,
-            'cheque_status' => $payment->cheque_status,
-            'status' => $payment->cheque_status ?: __('paid'),
-            'debit' => 0.00,
-            'credit' => (float) $payment->amount,
-            'pending_amount' => (float) $sale->due_amount,
-            'reference' => $payment->reference,
-            'cheque_no' => $payment->cheque_no,
-            'cheque_bank' => $payment->cheque_bank,
-            'cheque_date' => $payment->cheque_date,
-            'raw_date' => $payment->created_at,
-        ]));
+        $salePayments = $sales->flatMap(fn (Sale $sale) => $sale->payments->map(function (Payment $payment) use ($sale): array {
+            $isReturned = $payment->cheque_status === 'returned';
 
-        $accountPayments = Payment::query()
-            ->where('paymentable_type', Customer::class)
-            ->where('paymentable_id', $this->selectedCustomerId)
-            ->get()
-            ->map(fn (Payment $payment): array => [
-                'type' => 'account_payment',
-                'label' => __('Account Payment'),
+            return [
+                'type' => 'payment',
+                'label' => $isReturned ? __('Returned Cheque') : __('Invoice Payment'),
                 'date' => $payment->date,
-                'invoice_no' => __('Account Ledger'),
-                'invoice_id' => null,
-                'description' => __('Payment received directly on customer account'),
+                'invoice_no' => $sale->invoice_no,
+                'invoice_id' => $sale->id,
+                'description' => $isReturned
+                    ? __('Cheque returned for invoice').' '.$sale->invoice_no
+                    : __('Payment received for invoice'),
                 'payment_method' => $payment->payment_method,
                 'cheque_status' => $payment->cheque_status,
                 'status' => $payment->cheque_status ?: __('paid'),
                 'debit' => 0.00,
-                'credit' => (float) $payment->amount,
-                'pending_amount' => null,
+                'credit' => $isReturned ? 0.00 : (float) $payment->amount,
+                'amount' => (float) $payment->amount,
+                'pending_amount' => (float) $sale->due_amount,
                 'reference' => $payment->reference,
                 'cheque_no' => $payment->cheque_no,
                 'cheque_bank' => $payment->cheque_bank,
                 'cheque_date' => $payment->cheque_date,
                 'raw_date' => $payment->created_at,
-            ]);
+            ];
+        }));
+
+        $accountPayments = Payment::query()
+            ->where('paymentable_type', Customer::class)
+            ->where('paymentable_id', $this->selectedCustomerId)
+            ->get()
+            ->map(function (Payment $payment): array {
+                $isReturned = $payment->cheque_status === 'returned';
+
+                return [
+                    'type' => 'account_payment',
+                    'label' => $isReturned ? __('Returned Cheque') : __('Account Payment'),
+                    'date' => $payment->date,
+                    'invoice_no' => __('Account Ledger'),
+                    'invoice_id' => null,
+                    'description' => $isReturned
+                        ? __('Cheque returned directly on customer account')
+                        : __('Payment received directly on customer account'),
+                    'payment_method' => $payment->payment_method,
+                    'cheque_status' => $payment->cheque_status,
+                    'status' => $payment->cheque_status ?: __('paid'),
+                    'debit' => 0.00,
+                    'credit' => $isReturned ? 0.00 : (float) $payment->amount,
+                    'amount' => (float) $payment->amount,
+                    'pending_amount' => null,
+                    'reference' => $payment->reference,
+                    'cheque_no' => $payment->cheque_no,
+                    'cheque_bank' => $payment->cheque_bank,
+                    'cheque_date' => $payment->cheque_date,
+                    'raw_date' => $payment->created_at,
+                ];
+            });
 
         $partyCheques = Payment::query()
             ->where('paymentable_type', Purchase::class)
@@ -217,19 +231,23 @@ new #[Title('Customer Transactions')] class extends Component
             ->map(function (Payment $payment): array {
                 $purchase = $payment->paymentable;
                 $sourceSale = $payment->sourcePayment?->paymentable;
+                $isReturned = $payment->cheque_status === 'returned';
 
                 return [
                     'type' => 'party_cheque',
-                    'label' => __('Party Cheque'),
+                    'label' => $isReturned ? __('Returned Cheque') : __('Party Cheque'),
                     'date' => $payment->date,
                     'invoice_no' => $sourceSale?->invoice_no ?? __('Customer Cheque'),
                     'invoice_id' => $sourceSale?->id,
-                    'description' => __('Customer cheque used for supplier purchase') . ' ' . ($purchase?->invoice_no ?? ''),
+                    'description' => $isReturned
+                        ? __('Customer cheque returned from supplier purchase') . ' ' . ($purchase?->invoice_no ?? '')
+                        : __('Customer cheque used for supplier purchase') . ' ' . ($purchase?->invoice_no ?? ''),
                     'payment_method' => 'cheque',
                     'cheque_status' => $payment->cheque_status,
                     'status' => $payment->cheque_status ?: __('pending'),
                     'debit' => 0.00,
-                    'credit' => (float) $payment->amount,
+                    'credit' => $isReturned ? 0.00 : (float) $payment->amount,
+                    'amount' => (float) $payment->amount,
                     'pending_amount' => $sourceSale ? (float) $sourceSale->due_amount : null,
                     'reference' => $payment->reference,
                     'cheque_no' => $payment->cheque_no,

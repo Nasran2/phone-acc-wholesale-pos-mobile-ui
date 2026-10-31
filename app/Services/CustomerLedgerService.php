@@ -57,47 +57,69 @@ class CustomerLedgerService
             'raw_date' => $sale->created_at,
         ]);
 
-        $salePayments = $sales->flatMap(fn ($sale) => $sale->payments->map(fn ($pm) => [
-            'type' => 'payment',
-            'badge' => __('Payment'),
-            'id' => $pm->id,
-            'payment_id' => $pm->id,
-            'date' => $pm->date,
-            'bill_date' => $sale->date,
-            'paid_date' => $pm->date,
-            'bill_no' => $sale->invoice_no,
-            'ref' => $pm->reference ?: 'PAY-'.$pm->id,
-            'description' => __('Payment received for bill').' '.$sale->invoice_no,
-            'payment_method' => $pm->payment_method,
-            'payment_status' => $pm->cheque_status ?: __('paid'),
-            'invoice_status' => $sale->payment_status,
-            'invoice_due' => (float) $sale->due_amount,
-            'debit' => 0.00,
-            'credit' => (float) $pm->amount,
-            'raw_date' => $pm->created_at,
-        ]));
+        $salePayments = $sales->flatMap(fn ($sale) => $sale->payments->map(function ($pm) use ($sale) {
+            $isReturned = $pm->cheque_status === 'returned';
+
+            return [
+                'type' => 'payment',
+                'badge' => $isReturned ? __('Returned Cheque') : __('Payment'),
+                'id' => $pm->id,
+                'payment_id' => $pm->id,
+                'date' => $pm->date,
+                'bill_date' => $sale->date,
+                'paid_date' => $pm->date,
+                'bill_no' => $sale->invoice_no,
+                'ref' => $pm->cheque_no ?: $pm->reference ?: 'PAY-'.$pm->id,
+                'description' => $isReturned
+                    ? __('Cheque returned for bill').' '.$sale->invoice_no
+                    : __('Payment received for bill').' '.$sale->invoice_no,
+                'payment_method' => $pm->payment_method,
+                'payment_status' => $pm->cheque_status ?: __('paid'),
+                'cheque_no' => $pm->cheque_no,
+                'cheque_bank' => $pm->cheque_bank,
+                'cheque_date' => $pm->cheque_date,
+                'cheque_status' => $pm->cheque_status,
+                'invoice_status' => $sale->payment_status,
+                'invoice_due' => (float) $sale->due_amount,
+                'amount' => (float) $pm->amount,
+                'debit' => 0.00,
+                'credit' => $isReturned ? 0.00 : (float) $pm->amount,
+                'raw_date' => $pm->created_at,
+            ];
+        }));
 
         $payments = Payment::query()
             ->where('paymentable_type', Customer::class)
             ->where('paymentable_id', $customer->id)
             ->get()
-            ->map(fn ($pm) => [
-                'type' => 'account_payment',
-                'badge' => __('Account Payment'),
-                'id' => $pm->id,
-                'payment_id' => $pm->id,
-                'date' => $pm->date,
-                'bill_date' => null,
-                'paid_date' => $pm->date,
-                'bill_no' => __('Account Ledger'),
-                'ref' => $pm->reference ?: 'PAY-'.$pm->id,
-                'description' => __('Account payment received'),
-                'payment_method' => $pm->payment_method,
-                'payment_status' => $pm->cheque_status ?: __('paid'),
-                'debit' => 0.00,
-                'credit' => (float) $pm->amount,
-                'raw_date' => $pm->created_at,
-            ]);
+            ->map(function ($pm) {
+                $isReturned = $pm->cheque_status === 'returned';
+
+                return [
+                    'type' => 'account_payment',
+                    'badge' => $isReturned ? __('Returned Cheque') : __('Account Payment'),
+                    'id' => $pm->id,
+                    'payment_id' => $pm->id,
+                    'date' => $pm->date,
+                    'bill_date' => null,
+                    'paid_date' => $pm->date,
+                    'bill_no' => __('Account Ledger'),
+                    'ref' => $pm->cheque_no ?: $pm->reference ?: 'PAY-'.$pm->id,
+                    'description' => $isReturned
+                        ? __('Cheque returned on customer account')
+                        : __('Account payment received'),
+                    'payment_method' => $pm->payment_method,
+                    'payment_status' => $pm->cheque_status ?: __('paid'),
+                    'cheque_no' => $pm->cheque_no,
+                    'cheque_bank' => $pm->cheque_bank,
+                    'cheque_date' => $pm->cheque_date,
+                    'cheque_status' => $pm->cheque_status,
+                    'amount' => (float) $pm->amount,
+                    'debit' => 0.00,
+                    'credit' => $isReturned ? 0.00 : (float) $pm->amount,
+                    'raw_date' => $pm->created_at,
+                ];
+            });
 
         $supplierPartyCheques = Payment::query()
             ->where('paymentable_type', Purchase::class)
@@ -109,17 +131,20 @@ class CustomerLedgerService
             ->map(function ($pm) {
                 $purchase = $pm->paymentable;
                 $sourceSale = $pm->sourcePayment?->paymentable;
+                $isReturned = $pm->cheque_status === 'returned';
 
                 return [
                     'type' => 'payment',
-                    'badge' => __('Party Cheque'),
+                    'badge' => $isReturned ? __('Returned Cheque') : __('Party Cheque'),
                     'id' => 'supplier-party-'.$pm->id,
                     'date' => $pm->date,
                     'bill_date' => $purchase?->date,
                     'paid_date' => $pm->date,
                     'bill_no' => $sourceSale?->invoice_no ?? __('Customer Cheque'),
                     'ref' => $pm->cheque_no ?: $pm->reference ?: 'CHQ-'.$pm->id,
-                    'description' => __('Customer cheque used for supplier purchase').' '.($purchase?->invoice_no ?? ''),
+                    'description' => $isReturned
+                        ? __('Customer cheque returned from supplier purchase').' '.($purchase?->invoice_no ?? '')
+                        : __('Customer cheque used for supplier purchase').' '.($purchase?->invoice_no ?? ''),
                     'payment_method' => __('party cheque'),
                     'payment_status' => $pm->cheque_status ?: __('pending'),
                     'invoice_status' => $purchase?->payment_status,
@@ -127,10 +152,12 @@ class CustomerLedgerService
                     'cheque_no' => $pm->cheque_no,
                     'cheque_bank' => $pm->cheque_bank,
                     'cheque_date' => $pm->cheque_date,
+                    'cheque_status' => $pm->cheque_status,
                     'supplier_name' => $purchase?->supplier?->name,
                     'purchase_invoice_no' => $purchase?->invoice_no,
+                    'amount' => (float) $pm->amount,
                     'debit' => 0.00,
-                    'credit' => (float) $pm->amount,
+                    'credit' => $isReturned ? 0.00 : (float) $pm->amount,
                     'raw_date' => $pm->created_at,
                 ];
             });

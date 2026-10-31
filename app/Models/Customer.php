@@ -31,4 +31,23 @@ class Customer extends Model
     {
         return $this->morphMany(Payment::class, 'paymentable');
     }
+
+    public function recalculateDueBalance(): float
+    {
+        $salesDue = (float) $this->sales()->sum('due_amount');
+        $accountPayments = (float) $this->payments()
+            ->where(function ($query) {
+                $query->where('payment_method', '!=', 'cheque')
+                    ->orWhere(function ($q) {
+                        $q->where('payment_method', 'cheque')
+                            ->where('cheque_status', '!=', 'returned');
+                    });
+            })
+            ->sum('amount');
+
+        $due = round(max(0, (float) $this->opening_balance + $salesDue - $accountPayments), 2);
+        $this->update(['due_balance' => $due]);
+
+        return $due;
+    }
 }
