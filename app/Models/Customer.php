@@ -35,7 +35,7 @@ class Customer extends Model
     public function recalculateDueBalance(): float
     {
         $salesDue = (float) $this->sales()->sum('due_amount');
-        $accountPayments = (float) $this->payments()
+        $validPayments = $this->payments()
             ->where(function ($query) {
                 $query->where('payment_method', '!=', 'cheque')
                     ->orWhere(function ($q) {
@@ -43,9 +43,12 @@ class Customer extends Model
                             ->where('cheque_status', '!=', 'returned');
                     });
             })
-            ->sum('amount');
+            ->get();
 
-        $due = round(max(0, (float) $this->opening_balance + $salesDue - $accountPayments), 2);
+        $accountCredits = (float) $validPayments->where('payment_method', '!=', 'adjustment_debit')->sum('amount');
+        $accountDebits = (float) $validPayments->where('payment_method', 'adjustment_debit')->sum('amount');
+
+        $due = round(max(0, (float) $this->opening_balance + $salesDue + $accountDebits - $accountCredits), 2);
         $this->update(['due_balance' => $due]);
 
         return $due;

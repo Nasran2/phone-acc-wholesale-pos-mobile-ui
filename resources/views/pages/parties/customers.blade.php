@@ -40,6 +40,13 @@ new #[Title('Manage Customers')] class extends Component
     public string $payChequeNo = '';
     public string $payChequeDate = '';
 
+    // Customer Dues Adjustment state
+    public ?int $adjustingCustomerId = null;
+    public string $adjustType = 'reduce';
+    public $adjustAmount = 0.00;
+    public string $adjustReason = 'Duplicate payment correction';
+    public string $adjustDate = '';
+
     // Detail ledger statement state
     public ?int $selectedCustomerId = null;
 
@@ -287,6 +294,75 @@ new #[Title('Manage Customers')] class extends Component
         $this->reset('payingCustomerId', 'payAmount', 'payMethod', 'payReference', 'payNotes', 'payDate', 'payChequeBank', 'payChequeNo', 'payChequeDate');
     }
 
+    public function initiateAdjustment(int $id): void
+    {
+        $customer = Customer::query()->findOrFail($id);
+        $this->adjustingCustomerId = $customer->id;
+        $this->adjustType = 'reduce';
+        $this->adjustAmount = (float) $customer->due_balance;
+        $this->adjustReason = 'Duplicate payment correction';
+        $this->adjustDate = date('Y-m-d');
+    }
+
+    public function setAdjustmentToZero(): void
+    {
+        if (! $this->adjustingCustomerId) {
+            return;
+        }
+        $customer = Customer::query()->findOrFail($this->adjustingCustomerId);
+        $current = (float) $customer->due_balance;
+        if ($current >= 0) {
+            $this->adjustType = 'reduce';
+            $this->adjustAmount = $current;
+        } else {
+            $this->adjustType = 'increase';
+            $this->adjustAmount = abs($current);
+        }
+    }
+
+    public function resetAdjustmentForm(): void
+    {
+        $this->reset('adjustingCustomerId', 'adjustType', 'adjustAmount', 'adjustReason', 'adjustDate');
+    }
+
+    public function saveAdjustment(): void
+    {
+        abort_unless(auth()->user()?->hasPermission('view_accounting'), 403);
+        $this->validate([
+            'adjustingCustomerId' => 'required|exists:customers,id',
+            'adjustType' => 'required|in:reduce,increase',
+            'adjustAmount' => 'required|numeric|min:0.01',
+            'adjustReason' => 'required|string|max:255',
+            'adjustDate' => 'required|date',
+        ]);
+
+        $customer = Customer::query()->findOrFail($this->adjustingCustomerId);
+        $amount = (float) $this->adjustAmount;
+        $isReduce = $this->adjustType === 'reduce';
+
+        // 1. Log adjustment in payments ledger
+        $payment = $customer->payments()->create([
+            'amount' => $amount,
+            'payment_method' => $isReduce ? 'adjustment' : 'adjustment_debit',
+            'date' => $this->adjustDate ?: date('Y-m-d'),
+            'reference' => 'ADJ-' . strtoupper(substr(md5(uniqid()), 0, 6)),
+            'notes' => $this->adjustReason,
+        ]);
+
+        // 2. Adjust customer balance
+        if ($isReduce) {
+            $customer->decrement('due_balance', $amount);
+        } else {
+            $customer->increment('due_balance', $amount);
+        }
+
+        ActivityLogger::log('customer_adjustment', "Adjusted balance for customer {$customer->name} by " . ($isReduce ? '-' : '+') . "Rs {$amount}. Reason: {$this->adjustReason}");
+        Flux::toast(variant: 'success', text: __('Customer balance adjusted successfully.'));
+
+        $this->resetAdjustmentForm();
+        unset($this->selectedCustomer, $this->selectedCustomerLedger, $this->customers, $this->totalDueBalance, $this->customersWithDue);
+    }
+
     public function resetForm(): void
     {
         $this->reset('customerId', 'name', 'phone', 'email', 'address', 'opening_balance');
@@ -349,6 +425,7 @@ new #[Title('Manage Customers')] class extends Component
 <div class="flex flex-col gap-6" x-data="{
     ledgerOpen: @entangle('selectedCustomerId'),
     payOpen: @entangle('payingCustomerId'),
+    adjustOpen: @entangle('adjustingCustomerId'),
     saleOpen: @entangle('selectedSaleId'),
     editingCustomerId: @entangle('customerId'),
     mobileCustomerEditOpen: false,
@@ -540,6 +617,12 @@ new #[Title('Manage Customers')] class extends Component
                                     </flux:button>
                                 @endif
 
+                                @if (auth()->user()?->hasPermission('view_accounting'))
+                                    <flux:button variant="ghost" size="sm" class="text-amber-600 hover:text-amber-700" wire:click="initiateAdjustment({{ $c->id }})">
+                                        {{ __('Adjust') }}
+                                    </flux:button>
+                                @endif
+
                                 @if ($c->phone !== '0000000000')
                                     <flux:button variant="ghost" size="sm" wire:click="editCustomer({{ $c->id }})">
                                         Edit
@@ -664,12 +747,20 @@ new #[Title('Manage Customers')] class extends Component
                         <div class="flex items-center justify-between">
                             <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider block">{{ __('Outstanding Receivables') }}</span>
                             @if (auth()->user()?->hasPermission('view_accounting'))
-                                <button type="button" wire:click="syncCustomerBalance({{ $this->selectedCustomer?->id }})"
-                                    class="text-[10px] font-bold text-violet-600 hover:text-violet-700 hover:underline flex items-center gap-1"
-                                    title="{{ __('Recalculate and synchronize customer due balance with all invoices and payments') }}">
-                                    <flux:icon.arrow-path class="size-3" />
-                                    {{ __('Sync') }}
-                                </button>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" wire:click="initiateAdjustment({{ $this->selectedCustomer?->id }})"
+                                        class="text-[10px] font-bold text-amber-600 hover:text-amber-700 hover:underline flex items-center gap-1"
+                                        title="{{ __('Adjust customer due balance') }}">
+                                        <flux:icon.pencil-square class="size-3" />
+                                        {{ __('Adjust') }}
+                                    </button>
+                                    <button type="button" wire:click="syncCustomerBalance({{ $this->selectedCustomer?->id }})"
+                                        class="text-[10px] font-bold text-violet-600 hover:text-violet-700 hover:underline flex items-center gap-1"
+                                        title="{{ __('Recalculate and synchronize customer due balance with all invoices and payments') }}">
+                                        <flux:icon.arrow-path class="size-3" />
+                                        {{ __('Sync') }}
+                                    </button>
+                                </div>
                             @endif
                         </div>
                         <span class="text-lg font-bold text-zinc-900">
@@ -686,8 +777,8 @@ new #[Title('Manage Customers')] class extends Component
 
                 @php
                     $ledgerRows = $this->selectedCustomerLedger;
-                    $ledgerOrders = $ledgerRows->filter(fn ($row) => in_array($row['type'], ['invoice', 'opening', 'return'], true));
-                    $ledgerPayments = $ledgerRows->filter(fn ($row) => in_array($row['type'], ['payment', 'account_payment'], true));
+                    $ledgerOrders = $ledgerRows->filter(fn ($row) => in_array($row['type'], ['invoice', 'opening', 'return'], true) || ($row['type'] === 'adjustment' && ($row['debit'] ?? 0) > 0));
+                    $ledgerPayments = $ledgerRows->filter(fn ($row) => in_array($row['type'], ['payment', 'account_payment'], true) || ($row['type'] === 'adjustment' && ($row['credit'] ?? 0) > 0));
 
                     $ordersPerPage = 15;
                     $paymentsPerPage = 15;
@@ -767,10 +858,13 @@ new #[Title('Manage Customers')] class extends Component
                                                 <span class="text-sm font-bold text-amber-700">{{ __('Return value') }}: Rs {{ number_format($row['return_value'], 2) }}</span>
                                                 <p class="mt-1 text-xs text-zinc-500">{{ $row['adjustment_label'] }}: Rs {{ number_format($row['adjusted_amount'], 2) }}</p>
                                                 <p class="mt-1 text-xs text-zinc-500">{{ __('Cash refunded') }}: Rs {{ number_format($row['refund_amount'], 2) }}</p>
+                                            @elseif ($row['type'] === 'adjustment')
+                                                <span class="text-sm font-bold text-amber-600">+ Rs {{ number_format($row['debit'], 2) }}</span>
+                                                <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">{{ __('ADJUSTMENT') }}</p>
                                             @else
                                                 <span class="text-sm font-bold text-rose-600">+ Rs {{ number_format($row['debit'], 2) }}</span>
+                                                <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $row['payment_status'] }}</p>
                                             @endif
-                                            <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $row['payment_status'] }}</p>
                                         </div>
                                     </div>
                                 </button>
@@ -807,9 +901,10 @@ new #[Title('Manage Customers')] class extends Component
                                             <div class="flex flex-wrap items-center gap-2">
                                                 @php
                                                     $isReturned = ($row['cheque_status'] ?? null) === 'returned' || ($row['payment_status'] ?? null) === 'returned';
+                                                    $isAdjustment = ($row['type'] ?? null) === 'adjustment';
                                                     $invoiceStatus = $row['invoice_status'] ?? null;
                                                     $invoiceDue = (float) ($row['invoice_due'] ?? 0);
-                                                    $paymentTone = $isReturned ? 'rose' : ($invoiceStatus === 'paid' ? 'emerald' : ($invoiceStatus ? 'rose' : 'zinc'));
+                                                    $paymentTone = $isReturned ? 'rose' : ($isAdjustment ? 'amber' : ($invoiceStatus === 'paid' ? 'emerald' : ($invoiceStatus ? 'rose' : 'zinc')));
                                                 @endphp
                                                 <flux:badge size="sm" :color="$paymentTone">{{ $row['badge'] }}</flux:badge>
                                                 <span class="text-xs font-semibold text-zinc-400">{{ __('Bill No') }}: {{ $row['bill_no'] }}</span>
@@ -861,6 +956,9 @@ new #[Title('Manage Customers')] class extends Component
                                             @if ($isReturned)
                                                 <span class="text-sm font-bold text-rose-600 line-through">Rs {{ number_format($row['amount'] ?? $row['credit'], 2) }}</span>
                                                 <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-rose-600">{{ __('RETURNED') }}</p>
+                                            @elseif ($isAdjustment)
+                                                <span class="text-sm font-bold text-amber-600">- Rs {{ number_format($row['credit'], 2) }}</span>
+                                                <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-amber-600">{{ __('ADJUSTMENT') }}</p>
                                             @else
                                                 <span class="text-sm font-bold text-emerald-600">- Rs {{ number_format($row['credit'], 2) }}</span>
                                                 <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $invoiceStatus ? strtoupper((string) $invoiceStatus) : $row['payment_status'] }}</p>
@@ -1078,6 +1176,115 @@ new #[Title('Manage Customers')] class extends Component
         </div>
     </div>
 
+    <!-- 4.1 CUSTOMER DUES ADJUSTMENT MODAL -->
+    <div
+        x-cloak
+        x-show="adjustOpen"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 transition-opacity backdrop-blur-sm"
+        @click.self="adjustOpen = null; $wire.resetAdjustmentForm()"
+        x-transition:enter="ease-out duration-300"
+        x-transition:enter-start="opacity-0"
+        x-transition:enter-end="opacity-100"
+        x-transition:leave="ease-in duration-200"
+        x-transition:leave-start="opacity-100"
+        x-transition:leave-end="opacity-0"
+    >
+        <div
+            class="w-full max-w-lg bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden max-h-[95%]"
+            x-transition:enter="ease-out duration-300 transform scale-95"
+            x-transition:enter-start="opacity-0 scale-95"
+            x-transition:enter-end="opacity-100 scale-100"
+            x-transition:leave="ease-in duration-200 transform scale-100"
+            x-transition:leave-start="opacity-100 scale-100"
+            x-transition:leave-end="opacity-0 scale-95"
+        >
+            {{-- Header --}}
+            <div class="flex items-center justify-between border-b border-zinc-100 px-6 py-4 bg-amber-50/50">
+                <div>
+                    <h3 class="font-display text-base font-bold text-zinc-950">{{ __('Customer Balance Adjustment') }}</h3>
+                    @if($this->adjustingCustomerId)
+                        <p class="text-xs text-zinc-500 mt-0.5">{{ Customer::query()->find($this->adjustingCustomerId)?->name }}</p>
+                    @endif
+                </div>
+                <flux:button variant="ghost" size="sm" wire:click="resetAdjustmentForm">
+                    <flux:icon.x-mark class="size-4" />
+                </flux:button>
+            </div>
+
+            @php
+                $adjCustomer = $this->adjustingCustomerId ? Customer::query()->find($this->adjustingCustomerId) : null;
+                $adjCurrentDue  = (float) ($adjCustomer?->due_balance ?? 0);
+                $adjAmountFloat = (float) $this->adjustAmount;
+                $adjAfter = $this->adjustType === 'reduce'
+                    ? $adjCurrentDue - $adjAmountFloat
+                    : $adjCurrentDue + $adjAmountFloat;
+            @endphp
+
+            {{-- Balance Summary Banner --}}
+            <div class="grid grid-cols-2 divide-x divide-zinc-100 border-b border-zinc-100 bg-zinc-50/30">
+                <div class="px-6 py-4">
+                    <p class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ __('Current Balance') }}</p>
+                    <p class="mt-1 text-xl font-bold {{ $adjCurrentDue > 0 ? 'text-rose-600' : ($adjCurrentDue < 0 ? 'text-blue-600' : 'text-emerald-600') }}">
+                        Rs {{ number_format($adjCurrentDue, 2) }}
+                    </p>
+                    <p class="text-[10px] text-zinc-400 mt-0.5">{{ __('Existing customer due') }}</p>
+                </div>
+                <div class="px-6 py-4">
+                    <p class="text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ __('Balance After Adjustment') }}</p>
+                    <p class="mt-1 text-xl font-bold {{ abs($adjAfter) < 0.001 ? 'text-emerald-600' : ($adjAfter > 0 ? 'text-rose-600' : 'text-blue-600') }}">
+                        Rs {{ number_format($adjAfter, 2) }}
+                    </p>
+                    <p class="text-[10px] text-zinc-400 mt-0.5">
+                        {{ abs($adjAfter) < 0.001 ? __('Will be exactly Rs 0.00') : __('Resulting balance') }}
+                    </p>
+                </div>
+            </div>
+
+            <form wire:submit="saveAdjustment" class="p-6 flex flex-col gap-4">
+                <div class="flex items-center justify-between rounded-xl bg-amber-50/70 p-3 border border-amber-200/60">
+                    <div>
+                        <p class="text-xs font-bold text-amber-900">{{ __('Quick Action: Set Due to 0.00') }}</p>
+                        <p class="text-[11px] text-amber-700 mt-0.5">{{ __('Auto-fill the exact amount needed to clear the customer balance.') }}</p>
+                    </div>
+                    <flux:button type="button" size="sm" variant="primary" class="!bg-amber-600 hover:!bg-amber-700 text-white shrink-0" wire:click="setAdjustmentToZero">
+                        {{ __('Set Due to 0') }}
+                    </flux:button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <flux:label>{{ __('Adjustment Type') }}</flux:label>
+                        <flux:select wire:model.live="adjustType">
+                            <flux:select.option value="reduce">{{ __('Reduce Dues (Credit -)') }}</flux:select.option>
+                            <flux:select.option value="increase">{{ __('Increase Dues (Debit +)') }}</flux:select.option>
+                        </flux:select>
+                    </div>
+                    <div>
+                        <flux:input wire:model.live="adjustAmount" :label="__('Adjustment Amount (Rs)')" type="number" step="0.01" min="0.01" required />
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-3">
+                    <flux:input wire:model="adjustDate" :label="__('Adjustment Date')" type="date" required />
+                </div>
+
+                <div>
+                    <flux:input wire:model="adjustReason" :label="__('Reason / Notes')" placeholder="e.g. Duplicate payment correction, balance write-off" required />
+                </div>
+
+                <div class="flex gap-3 mt-2">
+                    <flux:button type="submit" variant="primary" class="flex-1 !bg-amber-600 hover:!bg-amber-700">
+                        <flux:icon.check class="size-4 mr-1" />
+                        {{ __('Save Adjustment') }}
+                    </flux:button>
+                    <flux:button type="button" variant="outline" wire:click="resetAdjustmentForm">
+                        {{ __('Cancel') }}
+                    </flux:button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- 4.5 SALE / BILL DETAIL MODAL -->
     <div
         x-cloak
@@ -1251,7 +1458,10 @@ new #[Title('Manage Customers')] class extends Component
         </thead>
         <tbody class="divide-y divide-zinc-100">
             @forelse($this->selectedCustomerLedger as $row)
-                @php($isReturned = ($row['cheque_status'] ?? null) === 'returned' || ($row['payment_status'] ?? null) === 'returned')
+                @php
+                    $isReturned = ($row['cheque_status'] ?? null) === 'returned' || ($row['payment_status'] ?? null) === 'returned';
+                    $isAdjustment = ($row['type'] ?? null) === 'adjustment';
+                @endphp
                 <tr>
                     <td class="py-3 px-2 whitespace-nowrap">{{ $row['bill_date']?->format('Y-m-d') ?? '-' }}</td>
                     <td class="py-3 px-2 whitespace-nowrap">{{ $row['paid_date']?->format('Y-m-d') ?? '-' }}</td>
@@ -1263,12 +1473,14 @@ new #[Title('Manage Customers')] class extends Component
                         @endif
                         @if ($isReturned)
                             <span class="ml-1 text-xs font-bold text-rose-600">· {{ __('RETURNED') }}</span>
+                        @elseif ($isAdjustment)
+                            <span class="ml-1 text-xs font-bold text-amber-600">· {{ __('ADJUSTMENT') }}</span>
                         @endif
                     </td>
-                    <td class="py-3 px-2 text-right text-rose-600 font-medium">
+                    <td class="py-3 px-2 text-right {{ $isAdjustment ? 'text-amber-600 font-bold' : 'text-rose-600 font-medium' }}">
                         {{ $row['debit'] > 0 ? number_format($row['debit'], 2) : '-' }}
                     </td>
-                    <td class="py-3 px-2 text-right font-medium {{ $isReturned ? 'text-rose-600 line-through' : 'text-emerald-600' }}">
+                    <td class="py-3 px-2 text-right font-medium {{ $isReturned ? 'text-rose-600 line-through' : ($isAdjustment ? 'text-amber-600 font-bold' : 'text-emerald-600') }}">
                         @if ($isReturned)
                             Rs {{ number_format($row['amount'] ?? 0, 2) }}
                         @else

@@ -69,6 +69,7 @@ class AccountingLedgerService
                 $query->where('payment_method', '!=', 'cheque')
                     ->orWhere('cheque_status', 'passed');
             })
+            ->whereNotIn('payment_method', ['adjustment', 'adjustment_credit', 'adjustment_debit'])
             ->when($paymentMethod, fn ($query) => $query->where('payment_method', $paymentMethod))
             ->when($search, function ($query, string $term): void {
                 $query->where(function ($query) use ($term): void {
@@ -89,6 +90,7 @@ class AccountingLedgerService
                 $query->where('payment_method', '!=', 'cheque')
                     ->orWhere('cheque_status', 'passed');
             })
+            ->whereNotIn('payment_method', ['adjustment', 'adjustment_credit', 'adjustment_debit'])
             ->when($paymentMethod, fn ($query) => $query->where('payment_method', $paymentMethod))
             ->when($search, function ($query, string $term): void {
                 $query->where(function ($query) use ($term): void {

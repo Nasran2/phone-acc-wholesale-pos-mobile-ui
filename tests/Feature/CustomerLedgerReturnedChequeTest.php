@@ -2,6 +2,7 @@
 
 use App\Models\Customer;
 use App\Models\User;
+use App\Services\AccountingLedgerService;
 use App\Services\ChequePaymentService;
 use App\Services\CustomerLedgerService;
 use Livewire\Livewire;
@@ -145,4 +146,68 @@ test('deleting bank transfer payment supports various casing and spacing', funct
     app(ChequePaymentService::class)->deleteCustomerPayment($payment, $customer->id);
     expect((float) $customer->fresh()->due_balance)->toBe(2000.0);
     $this->assertModelMissing($payment);
+});
+
+test('customer dues can be adjusted to zero via adjustment action', function () {
+    $customer = Customer::query()->create([
+        'name' => 'Mobile communication',
+        'due_balance' => 11000,
+        'opening_balance' => 0,
+    ]);
+
+    $component = Livewire::test('pages::parties.customers')
+        ->call('initiateAdjustment', $customer->id)
+        ->assertSet('adjustingCustomerId', $customer->id)
+        ->assertSet('adjustType', 'reduce')
+        ->assertSet('adjustAmount', 11000.0)
+        ->call('setAdjustmentToZero')
+        ->assertSet('adjustAmount', 11000.0)
+        ->set('adjustReason', 'Duplicate payment correction')
+        ->call('saveAdjustment')
+        ->assertHasNoErrors();
+
+    expect((float) $customer->fresh()->due_balance)->toBe(0.0);
+
+    // Verify polymorphic payment record
+    $adjustmentPayment = $customer->payments()->where('payment_method', 'adjustment')->first();
+    expect($adjustmentPayment)->not->toBeNull()
+        ->and((float) $adjustmentPayment->amount)->toBe(11000.0)
+        ->and($adjustmentPayment->notes)->toBe('Duplicate payment correction');
+
+    // Verify ledger mapping
+    $ledgerRows = app(CustomerLedgerService::class)->rows($customer);
+    $adjRow = $ledgerRows->firstWhere('id', $adjustmentPayment->id);
+    expect($adjRow)->not->toBeNull()
+        ->and($adjRow['type'])->toBe('adjustment')
+        ->and($adjRow['badge'])->toBe('Adjustment')
+        ->and($adjRow['credit'])->toBe(11000.0)
+        ->and($adjRow['debit'])->toBe(0.0)
+        ->and($adjRow['description'])->toBe('Duplicate payment correction');
+
+    // Verify ledger view contains the Adjustment badge
+    Livewire::test('pages::parties.customers')
+        ->call('viewLedger', $customer->id)
+        ->assertSee('Adjustment')
+        ->assertSee('ADJUSTMENT')
+        ->assertSee('Duplicate payment correction');
+
+    // Deleting the adjustment should restore due balance back to 11,000
+    app(ChequePaymentService::class)->deleteCustomerPayment($adjustmentPayment, $customer->id);
+    expect((float) $customer->fresh()->due_balance)->toBe(11000.0);
+});
+
+test('customer balance adjustment does not pollute cash flow ledger reports', function () {
+    $customer = Customer::query()->create(['name' => 'Non Cash Adjust Customer', 'due_balance' => 5000]);
+    $payment = $customer->payments()->create([
+        'amount' => 5000,
+        'payment_method' => 'adjustment',
+        'date' => today()->format('Y-m-d'),
+        'reference' => 'ADJ-TEST',
+        'notes' => 'Non-cash correction',
+    ]);
+
+    $accountingLedger = app(AccountingLedgerService::class);
+    $entries = $accountingLedger->transactions(today()->toDateString(), today()->toDateString());
+    $hasPaymentInCash = $entries->contains(fn ($e) => ($e['reference'] ?? '') === 'ADJ-TEST');
+    expect($hasPaymentInCash)->toBeFalse();
 });

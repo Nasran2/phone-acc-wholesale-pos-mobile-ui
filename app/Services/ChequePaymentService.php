@@ -46,7 +46,7 @@ class ChequePaymentService
             }
             $isCheque = $payment->payment_method === 'cheque';
             $method = strtolower(str_replace(['-', ' '], '_', trim((string) $payment->payment_method)));
-            if ((! $isCheque && (($customerId === null && $supplierId === null) || ! in_array($method, ['cash', 'card', 'bank_transfer', 'bank', 'qr'], true)))
+            if ((! $isCheque && (($customerId === null && $supplierId === null) || ! in_array($method, ['cash', 'card', 'bank_transfer', 'bank', 'qr', 'adjustment', 'adjustment_credit', 'adjustment_debit', 'adjust'], true)))
                 || ($isCheque && ! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true))
                 || (float) $payment->amount <= 0) {
                 throw ValidationException::withMessages(['cheque' => match (true) {
@@ -94,7 +94,11 @@ class ChequePaymentService
             } elseif ($owner instanceof Purchase) {
                 $this->syncPurchaseStatus($owner, $supplier);
             } elseif ($owner instanceof Customer && (! $isCheque || $payment->cheque_status !== 'returned')) {
-                $owner->increment('due_balance', (float) $payment->amount);
+                if ($payment->payment_method === 'adjustment_debit') {
+                    $owner->decrement('due_balance', (float) $payment->amount);
+                } else {
+                    $owner->increment('due_balance', (float) $payment->amount);
+                }
             } elseif ($owner instanceof Supplier) {
                 $deduction = match (true) {
                     ! $isCheque => (float) $payment->amount,

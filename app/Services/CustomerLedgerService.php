@@ -94,29 +94,29 @@ class CustomerLedgerService
             ->get()
             ->map(function ($pm) {
                 $isReturned = $pm->cheque_status === 'returned';
+                $isAdjustment = in_array($pm->payment_method, ['adjustment', 'adjustment_credit', 'adjustment_debit'], true);
+                $isDebitAdj = $pm->payment_method === 'adjustment_debit';
 
                 return [
-                    'type' => 'account_payment',
-                    'badge' => $isReturned ? __('Returned Cheque') : __('Account Payment'),
+                    'type' => $isAdjustment ? 'adjustment' : 'account_payment',
+                    'badge' => $isAdjustment ? __('Adjustment') : ($isReturned ? __('Returned Cheque') : __('Account Payment')),
                     'id' => $pm->id,
                     'payment_id' => $pm->id,
                     'date' => $pm->date,
                     'bill_date' => null,
                     'paid_date' => $pm->date,
-                    'bill_no' => __('Account Ledger'),
+                    'bill_no' => $isAdjustment ? ($pm->reference ?: __('Adjustment')) : __('Account Ledger'),
                     'ref' => $pm->cheque_no ?: $pm->reference ?: 'PAY-'.$pm->id,
-                    'description' => $isReturned
-                        ? __('Cheque returned on customer account')
-                        : __('Account payment received'),
+                    'description' => $pm->notes ?: ($isAdjustment ? __('Customer balance adjustment') : ($isReturned ? __('Cheque returned on customer account') : __('Account payment received'))),
                     'payment_method' => $pm->payment_method,
-                    'payment_status' => $pm->cheque_status ?: __('paid'),
+                    'payment_status' => $isAdjustment ? __('adjusted') : ($pm->cheque_status ?: __('paid')),
                     'cheque_no' => $pm->cheque_no,
                     'cheque_bank' => $pm->cheque_bank,
                     'cheque_date' => $pm->cheque_date,
                     'cheque_status' => $pm->cheque_status,
                     'amount' => (float) $pm->amount,
-                    'debit' => 0.00,
-                    'credit' => $isReturned ? 0.00 : (float) $pm->amount,
+                    'debit' => $isDebitAdj ? (float) $pm->amount : 0.00,
+                    'credit' => $isDebitAdj ? 0.00 : ($isReturned ? 0.00 : (float) $pm->amount),
                     'raw_date' => $pm->created_at,
                 ];
             });

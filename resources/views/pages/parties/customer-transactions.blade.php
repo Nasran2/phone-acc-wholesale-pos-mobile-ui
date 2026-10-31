@@ -196,21 +196,25 @@ new #[Title('Customer Transactions')] class extends Component
             ->get()
             ->map(function (Payment $payment): array {
                 $isReturned = $payment->cheque_status === 'returned';
+                $isAdjustment = in_array($payment->payment_method, ['adjustment', 'adjustment_credit', 'adjustment_debit'], true);
+                $isDebitAdj = $payment->payment_method === 'adjustment_debit';
 
                 return [
-                    'type' => 'account_payment',
-                    'label' => $isReturned ? __('Returned Cheque') : __('Account Payment'),
+                    'type' => $isAdjustment ? 'adjustment' : 'account_payment',
+                    'label' => $isAdjustment ? __('Adjustment') : ($isReturned ? __('Returned Cheque') : __('Account Payment')),
                     'date' => $payment->date,
-                    'invoice_no' => __('Account Ledger'),
+                    'invoice_no' => $isAdjustment ? ($payment->reference ?: __('Adjustment')) : __('Account Ledger'),
                     'invoice_id' => null,
-                    'description' => $isReturned
-                        ? __('Cheque returned directly on customer account')
-                        : __('Payment received directly on customer account'),
+                    'description' => $payment->notes ?: ($isAdjustment
+                        ? __('Customer balance adjustment')
+                        : ($isReturned
+                            ? __('Cheque returned directly on customer account')
+                            : __('Payment received directly on customer account'))),
                     'payment_method' => $payment->payment_method,
                     'cheque_status' => $payment->cheque_status,
-                    'status' => $payment->cheque_status ?: __('paid'),
-                    'debit' => 0.00,
-                    'credit' => $isReturned ? 0.00 : (float) $payment->amount,
+                    'status' => $isAdjustment ? __('adjusted') : ($payment->cheque_status ?: __('paid')),
+                    'debit' => $isDebitAdj ? (float) $payment->amount : 0.00,
+                    'credit' => $isDebitAdj ? 0.00 : ($isReturned ? 0.00 : (float) $payment->amount),
                     'amount' => (float) $payment->amount,
                     'pending_amount' => null,
                     'reference' => $payment->reference,
