@@ -6,6 +6,7 @@ use App\Models\Purchase;
 use App\Models\PurchaseReturn;
 use App\Models\Setting;
 use App\Services\ActivityLogger;
+use App\Services\ChequePaymentService;
 use Flux\Flux;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -137,6 +138,19 @@ new #[Title('Manage Suppliers')] class extends Component
     {
         $this->selectedSupplierId = null;
         $this->ledgerPaymentMethod = 'all';
+    }
+
+    public function deletePayment(int $paymentId, ChequePaymentService $service): void
+    {
+        abort_unless(auth()->user()?->hasPermission('view_accounting'), 403);
+        abort_unless($this->selectedSupplierId, 404);
+        $payment = Payment::query()->find($paymentId);
+        if ($payment) {
+            $service->deleteSupplierPayment($payment, $this->selectedSupplierId);
+        }
+        $this->resetValidation('cheque');
+        unset($this->selectedSupplier, $this->selectedSupplierLedger, $this->suppliers, $this->supplierTotals, $this->payingSupplier);
+        Flux::toast(variant: 'success', text: __('Payment deleted and its supplier balance and hold effects reversed.'));
     }
 
     public function initiatePayment(int $id): void
@@ -651,6 +665,7 @@ new #[Title('Manage Suppliers')] class extends Component
                         <option value="card">{{ __('Card') }}</option>
                         <option value="qr">{{ __('QR') }}</option>
                     </flux:select>
+                    <flux:error name="cheque" />
 
                     @forelse ($this->selectedSupplierLedger as $row)
                         <div class="flex flex-col gap-1 rounded-2xl border border-zinc-100 p-4 hover:bg-zinc-50/50 transition" wire:key="supplier-ledger-{{ $row['type'] }}-{{ $row['id'] }}">
@@ -686,6 +701,16 @@ new #[Title('Manage Suppliers')] class extends Component
                                 </div>
                             </div>
                             <p class="text-xs text-zinc-500">{{ $row['description'] }}</p>
+                            @if (in_array($row['type'], ['payment', 'purchase_payment'], true) && auth()->user()?->hasPermission('view_accounting'))
+                                <div class="flex justify-end">
+                                    <flux:button type="button" variant="ghost" size="sm" icon="trash" class="text-rose-600"
+                                        wire:click="deletePayment({{ $row['id'] }})"
+                                        wire:confirm="{{ __('Delete this supplier payment and reverse its invoice, supplier balance, and cheque hold effects? For a forwarded cheque, the original customer receipt is kept.') }}"
+                                        wire:loading.attr="disabled" wire:target="deletePayment">
+                                        {{ __('Delete Payment') }}
+                                    </flux:button>
+                                </div>
+                            @endif
                         </div>
                     @empty
                         <div class="py-10 text-center text-xs text-zinc-400">
