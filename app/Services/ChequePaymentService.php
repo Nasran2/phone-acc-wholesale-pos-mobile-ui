@@ -18,6 +18,83 @@ class ChequePaymentService
 {
     public function __construct(private SmsNotificationService $smsNotificationService) {}
 
+    public function delete(Payment $payment): void
+    {
+        DB::transaction(function () use ($payment): void {
+            $sourceId = Payment::query()->whereKey($payment->id)->value('source_payment_id');
+            if ($sourceId) {
+                Payment::query()->lockForUpdate()->findOrFail($sourceId);
+            }
+            $payment = Payment::query()->lockForUpdate()->find($payment->id);
+            if (! $payment) {
+                return;
+            }
+            if ($payment->payment_method !== 'cheque' || ! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true) || (float) $payment->amount <= 0) {
+                throw ValidationException::withMessages(['cheque' => __('Please select a valid cheque payment to delete.')]);
+            }
+            if ($payment->issuedPayments()->orderBy('id')->lockForUpdate()->get(['id'])->isNotEmpty()) {
+                throw ValidationException::withMessages(['cheque' => __('This customer cheque has been issued to a supplier. Delete its supplier payment first, then delete the customer receipt if needed.')]);
+            }
+
+            $ownerClass = match ($payment->paymentable_type) {
+                (new Customer)->getMorphClass() => Customer::class,
+                (new Supplier)->getMorphClass() => Supplier::class,
+                (new Sale)->getMorphClass() => Sale::class,
+                (new Purchase)->getMorphClass() => Purchase::class,
+                default => throw ValidationException::withMessages(['cheque' => __('This cheque must be corrected through its original transaction.')]),
+            };
+            $ownerQuery = in_array($ownerClass, [Customer::class, Supplier::class], true) ? $ownerClass::withTrashed() : $ownerClass::query();
+            $owner = $ownerQuery->lockForUpdate()->findOrFail($payment->paymentable_id);
+            $customer = null;
+            $supplier = null;
+            if ($owner instanceof Sale && $owner->customer_id) {
+                $customer = Customer::withTrashed()->lockForUpdate()->findOrFail($owner->customer_id);
+            } elseif ($owner instanceof Purchase && $owner->supplier_id) {
+                $supplier = Supplier::withTrashed()->lockForUpdate()->findOrFail($owner->supplier_id);
+            }
+
+            if (($owner instanceof Sale || $owner instanceof Purchase) && $payment->cheque_status === 'passed') {
+                $this->removePassedInvoicePayment($owner, $payment);
+            }
+            $payment->delete();
+
+            if ($owner instanceof Sale) {
+                $this->syncSaleStatus($owner, $customer);
+            } elseif ($owner instanceof Purchase) {
+                $this->syncPurchaseStatus($owner, $supplier);
+            } elseif ($owner instanceof Customer && $payment->cheque_status !== 'returned') {
+                $owner->increment('due_balance', (float) $payment->amount);
+            } elseif ($owner instanceof Supplier) {
+                $deduction = $payment->supplier_deduction_amount !== null
+                    ? (float) $payment->supplier_deduction_amount
+                    : ($payment->cheque_status === 'returned' ? 0.0 : (float) $payment->amount);
+                if ($deduction > 0) {
+                    $owner->increment('due_balance', $deduction);
+                }
+            }
+
+            ActivityLogger::log('cheque_deleted', __('Deleted cheque payment #:id (:number, :status, Rs :amount) for :type #:owner. Payment and hold effects reversed.', [
+                'id' => $payment->id, 'number' => $payment->cheque_no ?: $payment->reference,
+                'status' => $payment->cheque_status, 'amount' => $payment->amount,
+                'type' => class_basename($owner), 'owner' => $owner->id,
+            ]));
+        }, 3);
+    }
+
+    private function removePassedInvoicePayment(Sale|Purchase $invoice, Payment $payment): void
+    {
+        $remainingCapturedAmount = (float) $invoice->payments()->whereKeyNot($payment->id)
+            ->where(fn ($query) => $query->where('payment_method', '!=', 'cheque')->orWhere('cheque_status', 'passed'))
+            ->sum('amount');
+        if ($invoice instanceof Purchase) {
+            $remainingCapturedAmount += (float) $invoice->return_credit_amount;
+        }
+        $paidAmount = (float) $invoice->paid_amount;
+        $invoice->update([
+            'paid_amount' => round(min($paidAmount, max(0, $paidAmount - (float) $payment->amount, $remainingCapturedAmount)), 2),
+        ]);
+    }
+
     public function assignSupplier(Payment $payment, int $supplierId): Payment
     {
         return DB::transaction(function () use ($payment, $supplierId): Payment {
@@ -508,7 +585,7 @@ class ChequePaymentService
         ]);
     }
 
-    private function syncSaleStatus(Sale $sale): void
+    private function syncSaleStatus(Sale $sale, ?Customer $customer = null): void
     {
         $sale->refresh();
         $oldDueAmount = (float) $sale->due_amount;
@@ -534,14 +611,15 @@ class ChequePaymentService
         ]);
 
         $dueDelta = round($dueAmount - $oldDueAmount, 2);
-        if ($dueDelta !== 0.0 && $sale->customer) {
-            $sale->customer->update([
-                'due_balance' => round(max(0, (float) $sale->customer->due_balance + $dueDelta), 2),
+        $customer ??= $sale->customer;
+        if ($dueDelta !== 0.0 && $customer) {
+            $customer->update([
+                'due_balance' => round(max(0, (float) $customer->due_balance + $dueDelta), 2),
             ]);
         }
     }
 
-    private function syncPurchaseStatus(Purchase $purchase): void
+    private function syncPurchaseStatus(Purchase $purchase, ?Supplier $supplier = null): void
     {
         $purchase->refresh();
         $oldDueAmount = (float) $purchase->due_amount;
@@ -567,9 +645,10 @@ class ChequePaymentService
         ]);
 
         $dueDelta = round($dueAmount - $oldDueAmount, 2);
-        if ($dueDelta !== 0.0 && $purchase->supplier) {
-            $purchase->supplier->update([
-                'due_balance' => round(max(0, (float) $purchase->supplier->due_balance + $dueDelta), 2),
+        $supplier ??= $purchase->supplier;
+        if ($dueDelta !== 0.0 && $supplier) {
+            $supplier->update([
+                'due_balance' => round(max(0, (float) $supplier->due_balance + $dueDelta), 2),
             ]);
         }
     }

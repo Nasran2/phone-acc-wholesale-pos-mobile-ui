@@ -2,6 +2,7 @@
 
 use App\Models\Customer;
 use App\Models\Payment;
+use App\Models\Purchase;
 use App\Models\Sale;
 use App\Models\Supplier;
 use App\Services\ChequePaymentService;
@@ -137,6 +138,20 @@ new #[Title('Cheque Report')] class extends Component
         $payment = Payment::query()->findOrFail($paymentId);
         $service->revertToPending($payment);
         Flux::toast(variant: 'success', text: __('Cheque reverted to pending status.'));
+    }
+
+    public function deleteCheque(int $paymentId, ChequePaymentService $service): void
+    {
+        abort_unless($this->canManageCheques, 403);
+        $payment = Payment::query()->find($paymentId);
+        if ($payment) {
+            $service->delete($payment);
+        }
+        $this->resetValidation('cheque');
+        unset($this->cheques, $this->suppliers);
+        $this->resetPage();
+        $this->dispatch('cheque-updated');
+        Flux::toast(variant: 'success', text: __('Cheque payment deleted and its balance effects reversed.'));
     }
 
     #[Computed]
@@ -354,6 +369,9 @@ new #[Title('Cheque Report')] class extends Component
                                         @if ($pm->cheque_status !== 'pending')
                                             <flux:navmenu.item wire:click="markAsPending({{ $pm->id }})" icon="clock" class="text-amber-600">Revert to Pending</flux:navmenu.item>
                                         @endif
+                                        @if ($pm->paymentable instanceof Sale || $pm->paymentable instanceof Customer || $pm->paymentable instanceof Supplier || $pm->paymentable instanceof Purchase)
+                                            <flux:navmenu.item wire:click="deleteCheque({{ $pm->id }})" wire:confirm="{{ __('Delete this cheque payment and reverse its payment and hold effects? For a forwarded customer cheque, the supplier payment is removed and the original customer receipt is kept.') }}" wire:loading.attr="disabled" wire:target="deleteCheque" icon="trash" class="text-rose-600">{{ __('Delete Cheque') }}</flux:navmenu.item>
+                                        @endif
                                     </flux:navmenu>
                                 </flux:dropdown>
                                 @endif
@@ -371,6 +389,8 @@ new #[Title('Cheque Report')] class extends Component
             {{ $this->cheques->links() }}
         </div>
     </div>
+
+    <flux:error name="cheque" />
 
     <!-- Edit Cheque Modal -->
     <flux:modal name="edit-cheque" class="md:w-96">
