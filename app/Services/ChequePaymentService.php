@@ -129,7 +129,7 @@ class ChequePaymentService
                 throw ValidationException::withMessages(['assignedSupplierId' => __('This cheque has already been issued. Refresh the report and edit the supplier cheque instead.')]);
             }
 
-            $suppliers = Supplier::withTrashed()->whereIn('id', [$supplierId, $owner instanceof Supplier ? $owner->id : $supplierId])
+            $suppliers = Supplier::withTrashed()->withPendingChequeHold()->whereIn('id', [$supplierId, $owner instanceof Supplier ? $owner->id : $supplierId])
                 ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
             $newSupplier = $suppliers->get($supplierId);
             if (! $newSupplier || $newSupplier->trashed()) {
@@ -141,8 +141,8 @@ class ChequePaymentService
                 return $payment->refresh();
             }
             $deduction = in_array($payment->cheque_status, ['pending', 'passed'], true) ? (float) $payment->amount : 0.0;
-            if ($deduction > 0 && $deduction > (float) $newSupplier->due_balance) {
-                throw ValidationException::withMessages(['assignedSupplierId' => __('The cheque amount exceeds this supplier’s outstanding due.')]);
+            if ($deduction > 0 && $deduction > $newSupplier->payableSummary()['due_after_pending']) {
+                throw ValidationException::withMessages(['assignedSupplierId' => __('The cheque amount exceeds this supplier’s due after pending cheques.')]);
             }
 
             $oldSupplierName = $owner instanceof Supplier ? $owner->name : __('None');

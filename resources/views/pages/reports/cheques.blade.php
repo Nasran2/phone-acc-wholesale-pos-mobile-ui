@@ -45,6 +45,7 @@ new #[Title('Cheque Report')] class extends Component
         $this->assignedSupplierId = $payment->paymentable instanceof Supplier ? (string) $payment->paymentable_id : null;
         $this->assignChequeAmount = $payment->amount;
         $this->assignChequeStatus = $payment->cheque_status;
+        unset($this->suppliers, $this->assignmentSupplier);
         $this->resetValidation();
         Flux::modal('assign-cheque-supplier')->show();
     }
@@ -55,7 +56,7 @@ new #[Title('Cheque Report')] class extends Component
         $this->validate(['assignedSupplierId' => ['required', 'integer']]);
         $payment = Payment::query()->where('payment_method', 'cheque')->findOrFail($this->assignPaymentId);
         $service->assignSupplier($payment, (int) $this->assignedSupplierId);
-        unset($this->cheques, $this->suppliers);
+        unset($this->cheques, $this->suppliers, $this->assignmentSupplier);
         $this->resetPage();
         $this->reset('assignPaymentId', 'assignedSupplierId', 'assignChequeAmount', 'assignChequeStatus');
         Flux::modal('assign-cheque-supplier')->close();
@@ -205,7 +206,15 @@ new #[Title('Cheque Report')] class extends Component
     #[Computed]
     public function suppliers()
     {
-        return \App\Models\Supplier::orderBy('name')->get();
+        return Supplier::query()->withPendingChequeHold()->orderBy('name')->get();
+    }
+
+    #[Computed]
+    public function assignmentSupplier(): ?Supplier
+    {
+        return $this->assignedSupplierId
+            ? $this->suppliers->firstWhere('id', (int) $this->assignedSupplierId)
+            : null;
     }
 
     public function downloadPdf()
@@ -416,17 +425,20 @@ new #[Title('Cheque Report')] class extends Component
         </div>
     </flux:modal>
 
-    <flux:modal name="assign-cheque-supplier" class="md:w-96">
+    <flux:modal name="assign-cheque-supplier" class="md:w-[36rem]">
         <form wire:submit="saveChequeSupplier" class="space-y-5">
             <div>
                 <flux:heading size="lg">{{ __('Assign or change supplier') }}</flux:heading>
                 <flux:text>{{ __('Cheque amount: Rs :amount', ['amount' => number_format((float) $assignChequeAmount, 2)]) }}</flux:text>
             </div>
-            <flux:select wire:model="assignedSupplierId" label="{{ __('Supplier') }}" placeholder="{{ __('Choose supplier') }}">
+            <flux:select wire:model.live="assignedSupplierId" label="{{ __('Supplier') }}" placeholder="{{ __('Choose supplier') }}">
                 @foreach ($this->suppliers as $supplier)
-                    <option value="{{ $supplier->id }}" wire:key="assign-cheque-supplier-{{ $supplier->id }}">{{ $supplier->name }} · {{ __('Due: Rs :amount', ['amount' => number_format((float) $supplier->due_balance, 2)]) }}</option>
+                    <option value="{{ $supplier->id }}" wire:key="assign-cheque-supplier-{{ $supplier->id }}">{{ $supplier->name }} · {{ __('Due After Pending: Rs :amount', ['amount' => number_format($supplier->payableSummary()['due_after_pending'], 2)]) }}</option>
                 @endforeach
             </flux:select>
+            @if ($this->assignmentSupplier)
+                <x-supplier-balance-summary :summary="$this->assignmentSupplier->payableSummary()" :compact="true" />
+            @endif
             @if ($assignChequeStatus === 'passed')
                 <flux:text>{{ __('This cheque has passed. Saving reduces the selected supplier’s due. When changing supplier, the previous deduction is restored first.') }}</flux:text>
             @else
