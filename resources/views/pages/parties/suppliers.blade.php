@@ -43,6 +43,7 @@ new #[Title('Manage Suppliers')] class extends Component
 
     // Detail ledger statement state
     public ?int $selectedSupplierId = null;
+    public string $ledgerPaymentMethod = 'all';
 
     protected $queryString = ['search'];
 
@@ -129,11 +130,13 @@ new #[Title('Manage Suppliers')] class extends Component
     public function viewLedger(int $id): void
     {
         $this->selectedSupplierId = $id;
+        $this->ledgerPaymentMethod = 'all';
     }
 
     public function closeLedger(): void
     {
         $this->selectedSupplierId = null;
+        $this->ledgerPaymentMethod = 'all';
     }
 
     public function initiatePayment(int $id): void
@@ -318,18 +321,34 @@ new #[Title('Manage Suppliers')] class extends Component
         if (! $this->selectedSupplierId) return [];
 
         $purchases = Purchase::query()
+            ->with('payments')
             ->where('supplier_id', $this->selectedSupplierId)
-            ->get()
-            ->map(fn($pur) => [
-                'type' => 'invoice',
-                'id' => $pur->id,
-                'date' => $pur->date,
-                'ref' => $pur->invoice_no,
-                'description' => "Restock Invoice - Status: " . strtoupper($pur->payment_status),
-                'credit' => $pur->grand_total,
-                'debit' => 0,
-                'raw_date' => $pur->created_at,
-            ]);
+            ->get();
+
+        $invoices = $purchases->map(fn (Purchase $purchase): array => [
+            'type' => 'invoice',
+            'id' => $purchase->id,
+            'date' => $purchase->date,
+            'ref' => $purchase->invoice_no,
+            'description' => 'Restock Invoice - Status: '.strtoupper($purchase->payment_status),
+            'credit' => $purchase->grand_total,
+            'debit' => 0,
+            'raw_date' => $purchase->created_at,
+        ]);
+
+        $purchasePayments = $purchases->flatMap(fn (Purchase $purchase) => $purchase->payments->map(fn (Payment $payment): array => [
+            'type' => 'purchase_payment',
+            'id' => $payment->id,
+            'date' => $payment->date,
+            'ref' => $payment->cheque_no ?: $payment->reference ?: 'PAY-'.$payment->id,
+            'description' => __('Payment for purchase :invoice', ['invoice' => $purchase->invoice_no]),
+            'payment_method' => $payment->payment_method,
+            'credit' => 0,
+            'debit' => (float) $payment->amount,
+            'cheque_amount' => $payment->payment_method === 'cheque' ? (float) $payment->amount : null,
+            'cheque_status' => $payment->payment_method === 'cheque' ? $payment->cheque_status : null,
+            'raw_date' => $payment->created_at,
+        ]));
 
         $payments = Payment::query()
             ->where('paymentable_type', Supplier::class)
@@ -341,6 +360,7 @@ new #[Title('Manage Suppliers')] class extends Component
                 'date' => $pm->date,
                 'ref' => $pm->reference ?: 'PAY-' . $pm->id,
                 'description' => "Payoff Remitted (" . strtoupper($pm->payment_method) . ")",
+                'payment_method' => $pm->payment_method,
                 'credit' => 0,
                 'debit' => $pm->supplier_deduction_amount ?? $pm->amount,
                 'cheque_amount' => $pm->payment_method === 'cheque' ? (float) $pm->amount : null,
@@ -361,7 +381,10 @@ new #[Title('Manage Suppliers')] class extends Component
                 'raw_date' => $return->created_at,
             ]);
 
-        return $purchases->concat($payments)->concat($returns)->sortBy('raw_date')->values()->all();
+        return $invoices->concat($purchasePayments)->concat($payments)->concat($returns)
+            ->filter(fn (array $row): bool => $this->ledgerPaymentMethod === 'all'
+                || ($row['payment_method'] ?? null) === $this->ledgerPaymentMethod)
+            ->sortBy('raw_date')->values()->all();
     }
 
     #[Computed]
@@ -620,13 +643,25 @@ new #[Title('Manage Suppliers')] class extends Component
                 <div class="flex flex-col gap-3">
                     <h4 class="text-xs font-semibold text-zinc-400 uppercase tracking-wider">{{ __('Account Timeline') }}</h4>
 
+                    <flux:select wire:model.live="ledgerPaymentMethod" :label="__('Payment Method')">
+                        <option value="all">{{ __('All payments and invoices') }}</option>
+                        <option value="cash">{{ __('Cash') }}</option>
+                        <option value="bank_transfer">{{ __('Bank Transfer') }}</option>
+                        <option value="cheque">{{ __('Cheque') }}</option>
+                        <option value="card">{{ __('Card') }}</option>
+                        <option value="qr">{{ __('QR') }}</option>
+                    </flux:select>
+
                     @forelse ($this->selectedSupplierLedger as $row)
-                        <div class="flex flex-col gap-1 rounded-2xl border border-zinc-100 p-4 hover:bg-zinc-50/50 transition">
-                            <div class="flex items-start justify-between">
-                                <div>
+                        <div class="flex flex-col gap-1 rounded-2xl border border-zinc-100 p-4 hover:bg-zinc-50/50 transition" wire:key="supplier-ledger-{{ $row['type'] }}-{{ $row['id'] }}">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0">
                                     <span class="text-xs text-zinc-400">{{ $row['date']->format('Y-m-d') }}</span>
                                     <div class="mt-0.5 flex flex-wrap items-center gap-2">
-                                        <h5 class="text-sm font-semibold text-zinc-900">{{ $row['ref'] }}</h5>
+                                        <h5 class="break-all text-sm font-semibold text-zinc-900">{{ $row['ref'] }}</h5>
+                                        @if (! empty($row['payment_method']))
+                                            <flux:badge size="sm" color="zinc">{{ str($row['payment_method'])->replace('_', ' ')->headline() }}</flux:badge>
+                                        @endif
                                         @if (! empty($row['cheque_status']))
                                             <span @class([
                                                 'text-[9px] font-black uppercase tracking-wider rounded-full px-2 py-0.5',
@@ -654,7 +689,7 @@ new #[Title('Manage Suppliers')] class extends Component
                         </div>
                     @empty
                         <div class="py-10 text-center text-xs text-zinc-400">
-                            {{ __('No purchase restocks or outward remittances logged.') }}
+                            {{ __('No transactions match this payment method.') }}
                         </div>
                     @endforelse
                 </div>
