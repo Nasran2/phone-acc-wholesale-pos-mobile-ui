@@ -336,7 +336,7 @@ test('supplier cards and ledger show assigned and purchase cheque holds once and
 
     expect((float) Supplier::query()->withPendingChequeHold()->findOrFail($supplier->id)->pending_cheque_hold_amount)->toBe(1500.0);
     $page = Livewire::test('pages::parties.suppliers')->call('viewLedger', $supplier->id)
-        ->assertSee('Cheque Hold')->assertSee('1,500.00')->assertSee('2,000.00');
+        ->assertSee('Total Pending')->assertSee('1,500.00')->assertSee('2,000.00');
     expect((float) $page->instance()->selectedSupplier->pending_cheque_hold_amount)->toBe(1500.0);
     $service->pass($issued);
     $page->call('$refresh');

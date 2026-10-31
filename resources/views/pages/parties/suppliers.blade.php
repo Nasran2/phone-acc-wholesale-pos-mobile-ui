@@ -7,6 +7,8 @@ use App\Models\PurchaseReturn;
 use App\Models\Setting;
 use App\Services\ActivityLogger;
 use Flux\Flux;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -136,9 +138,9 @@ new #[Title('Manage Suppliers')] class extends Component
 
     public function initiatePayment(int $id): void
     {
-        $supplier = Supplier::query()->findOrFail($id);
+        $supplier = Supplier::query()->withPendingChequeHold()->findOrFail($id);
         $this->payingSupplierId = $supplier->id;
-        $this->payAmount = (float) $supplier->due_balance;
+        $this->payAmount = $supplier->payableSummary()['due_after_pending'];
         $this->payChequeDate = today()->toDateString();
     }
 
@@ -174,13 +176,13 @@ new #[Title('Manage Suppliers')] class extends Component
             'payPartyChequePaymentId' => 'required_if:payMethod,party_cheque|nullable|exists:payments,id',
         ]);
 
-        $supplier = Supplier::query()->findOrFail($this->payingSupplierId);
+        $supplier = Supplier::query()->withPendingChequeHold()->findOrFail($this->payingSupplierId);
 
         $isOwnCheque = $this->payMethod === 'own_cheque';
         $isPartyCheque = $this->payMethod === 'party_cheque';
         $isCheque = $isOwnCheque || $isPartyCheque;
 
-        if ((float) $this->payAmount > $supplier->due_balance) {
+        if ((float) $this->payAmount > $supplier->payableSummary()['due_after_pending']) {
             Flux::toast(variant: 'danger', text: __('Payment amount exceeds total outstanding due.'));
             return;
         }
@@ -261,23 +263,53 @@ new #[Title('Manage Suppliers')] class extends Component
         $this->reset('supplierId', 'name', 'phone', 'email', 'company_name', 'address', 'opening_balance');
     }
 
-    #[Computed]
-    public function suppliers()
+    private function filteredSuppliersQuery(): Builder
     {
         return Supplier::query()
-            ->withPendingChequeHold()
             ->where(function ($query) {
                 $query->where('name', 'like', '%' . $this->search . '%')
                       ->orWhere('company_name', 'like', '%' . $this->search . '%');
-            })
+            });
+    }
+
+    #[Computed]
+    public function suppliers()
+    {
+        return $this->filteredSuppliersQuery()->withPendingChequeHold()
             ->orderBy('id', 'desc')
             ->paginate(10);
+    }
+
+    /** @return array{total_due: float, pending: float, due_after_pending: float} */
+    #[Computed]
+    public function supplierTotals(): array
+    {
+        $balances = $this->filteredSuppliersQuery()->select(['id', 'due_balance'])->withPendingChequeHold();
+        $totalDue = 'due_balance + COALESCE(pending_account_cheque_deduction, 0) + COALESCE(pending_purchase_cheque_hold, 0)';
+        $pending = 'COALESCE(pending_account_cheque_hold, 0) + COALESCE(pending_purchase_cheque_hold, 0)';
+        $totals = DB::query()->fromSub($balances, 'supplier_balances')->selectRaw("
+            COALESCE(SUM(CASE WHEN ($totalDue) > 0 THEN ($totalDue) ELSE 0 END), 0) as total_due,
+            COALESCE(SUM($pending), 0) as pending,
+            COALESCE(SUM(CASE WHEN ($totalDue) > ($pending) THEN ($totalDue) - ($pending) ELSE 0 END), 0) as due_after_pending
+        ")->first();
+
+        return [
+            'total_due' => round((float) $totals->total_due, 2),
+            'pending' => round((float) $totals->pending, 2),
+            'due_after_pending' => round((float) $totals->due_after_pending, 2),
+        ];
     }
 
     #[Computed]
     public function selectedSupplier()
     {
         return $this->selectedSupplierId ? Supplier::query()->withPendingChequeHold()->findOrFail($this->selectedSupplierId) : null;
+    }
+
+    #[Computed]
+    public function payingSupplier(): ?Supplier
+    {
+        return $this->payingSupplierId ? Supplier::query()->withPendingChequeHold()->findOrFail($this->payingSupplierId) : null;
     }
 
     #[Computed]
@@ -311,6 +343,7 @@ new #[Title('Manage Suppliers')] class extends Component
                 'description' => "Payoff Remitted (" . strtoupper($pm->payment_method) . ")",
                 'credit' => 0,
                 'debit' => $pm->supplier_deduction_amount ?? $pm->amount,
+                'cheque_amount' => $pm->payment_method === 'cheque' ? (float) $pm->amount : null,
                 'cheque_status' => $pm->payment_method === 'cheque' ? $pm->cheque_status : null,
                 'raw_date' => $pm->created_at,
             ]);
@@ -418,6 +451,11 @@ new #[Title('Manage Suppliers')] class extends Component
         </div>
     </div>
 
+    <section class="space-y-2" aria-label="{{ __('Supplier totals') }}">
+        <p class="text-xs font-semibold text-zinc-500">{{ filled($search) ? __('All matching suppliers') : __('All suppliers') }}</p>
+        <x-supplier-balance-summary :summary="$this->supplierTotals" />
+    </section>
+
     <!-- Main Section Grid -->
     <div class="grid gap-6 lg:grid-cols-[1fr_2fr]">
         <!-- 1. Supplier Form Card -->
@@ -479,7 +517,7 @@ new #[Title('Manage Suppliers')] class extends Component
 
             <div class="grid gap-3">
                 @foreach ($this->suppliers as $s)
-                    <div class="app-card p-4 flex flex-col gap-3 justify-between sm:flex-row sm:items-center" wire:key="supplier-item-{{ $s->id }}">
+                    <div class="app-card flex min-w-0 flex-col gap-4 p-4" wire:key="supplier-item-{{ $s->id }}">
                         <div class="flex items-center gap-3">
                             <div class="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 text-zinc-600 font-semibold">
                                 {{ Str::substr($s->name, 0, 2) }}
@@ -502,26 +540,15 @@ new #[Title('Manage Suppliers')] class extends Component
                             </div>
                         </div>
 
-                        <!-- Actions / Account Info -->
-                        <div class="flex items-center justify-between border-t border-zinc-100 pt-3 sm:border-t-0 sm:pt-0 sm:gap-4">
-                            <div class="flex flex-col sm:items-end">
-                                <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider">{{ __('Payables Due') }}</span>
-                                <span class="text-sm font-bold {{ $s->due_balance > 0 ? 'text-rose-600' : 'text-emerald-600' }}">
-                                    Rs {{ number_format($s->due_balance, 2) }}
-                                </span>
-                                @if ($s->pending_cheque_hold_amount > 0)
-                                    <span class="mt-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                                        {{ __('Cheque Hold') }}: Rs {{ number_format($s->pending_cheque_hold_amount, 2) }}
-                                    </span>
-                                @endif
-                            </div>
+                        <x-supplier-balance-summary :summary="$s->payableSummary()" :compact="true" />
 
+                        <div class="flex justify-end border-t border-zinc-100 pt-3 dark:border-zinc-800">
                             <div class="flex items-center gap-1">
                                 <flux:button variant="ghost" size="sm" wire:click="viewLedger({{ $s->id }})">
                                     Ledger
                                 </flux:button>
 
-                                @if ($s->due_balance > 0)
+                                @if ($s->payableSummary()['due_after_pending'] > 0)
                                     <flux:button variant="ghost" size="sm" class="text-emerald-600 hover:text-emerald-700" wire:click="initiatePayment({{ $s->id }})">
                                         Payoff
                                     </flux:button>
@@ -586,25 +613,8 @@ new #[Title('Manage Suppliers')] class extends Component
 
             <!-- Ledger Rows Scroll List -->
             <div class="flex-1 overflow-y-auto p-5 scrollbar-none flex flex-col gap-4">
-                <!-- Supplier Quick Info Card -->
-                <div class="grid grid-cols-2 gap-4 rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
-                    <div>
-                        <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider block">{{ __('Outstanding Payables') }}</span>
-                        <span class="text-lg font-bold text-zinc-900">
-                            Rs {{ number_format($this->selectedSupplier?->due_balance ?? 0, 2) }}
-                        </span>
-                    </div>
-                    <div>
-                        <span class="text-[10px] text-zinc-400 uppercase font-semibold tracking-wider block">{{ __('Opening Balance') }}</span>
-                        <span class="text-lg font-semibold text-zinc-600">
-                            Rs {{ number_format($this->selectedSupplier?->opening_balance ?? 0, 2) }}
-                        </span>
-                    </div>
-                    <div class="col-span-2 rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30">
-                        <span class="block text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">{{ __('Cheque Hold') }}</span>
-                        <span class="text-lg font-bold text-amber-700 dark:text-amber-400">Rs {{ number_format($this->selectedSupplier?->pending_cheque_hold_amount ?? 0, 2) }}</span>
-                    </div>
-                </div>
+                <x-supplier-balance-summary :summary="$this->selectedSupplier?->payableSummary() ?? []" :compact="true" />
+                <p class="text-xs text-zinc-500">{{ __('Opening Balance') }}: Rs {{ number_format($this->selectedSupplier?->opening_balance ?? 0, 2) }}</p>
 
                 <!-- Ledger Timeline -->
                 <div class="flex flex-col gap-3">
@@ -631,7 +641,9 @@ new #[Title('Manage Suppliers')] class extends Component
                                     </div>
                                 </div>
                                 <div class="text-right">
-                                    @if ($row['credit'] > 0)
+                                    @if (($row['cheque_amount'] ?? null) !== null)
+                                        <x-cheque-payment-amount :amount="$row['cheque_amount']" :status="$row['cheque_status']" />
+                                    @elseif ($row['credit'] > 0)
                                         <span class="text-sm font-bold text-rose-600">+ Rs {{ number_format($row['credit'], 2) }}</span>
                                     @else
                                         <span class="text-sm font-bold text-emerald-600">- Rs {{ number_format($row['debit'], 2) }}</span>
@@ -681,13 +693,12 @@ new #[Title('Manage Suppliers')] class extends Component
 
             <form wire:submit="savePayment" class="mt-4 flex flex-col gap-4">
                 @php
-                    $paySupplier = $this->payingSupplierId ? Supplier::query()->find($this->payingSupplierId) : null;
-                    $currentDue = (float) ($paySupplier?->due_balance ?? 0);
+                    $currentDue = $this->payingSupplier?->payableSummary()['due_after_pending'] ?? 0;
                     $afterPay = max(0, $currentDue - (float) $this->payAmount);
                 @endphp
 
                 <div class="rounded-2xl bg-zinc-50 border border-zinc-100 p-4">
-                    <p class="text-xs text-zinc-500 uppercase tracking-wider font-semibold">{{ __('Total Pending Accounts Payable') }}</p>
+                    <p class="text-xs text-zinc-500 uppercase tracking-wider font-semibold">{{ __('Due After Pending') }}</p>
                     <p class="text-lg font-bold text-rose-600 mt-0.5">
                         Rs {{ number_format($currentDue, 2) }}
                     </p>

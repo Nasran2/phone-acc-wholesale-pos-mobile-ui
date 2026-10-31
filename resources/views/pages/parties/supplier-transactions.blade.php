@@ -147,6 +147,7 @@ new #[Title('Supplier Transactions')] class extends Component
             'status' => $payment->cheque_status ?: __('paid'),
             'credit' => 0.00,
             'debit' => (float) $payment->amount,
+            'cheque_amount' => $payment->payment_method === 'cheque' ? (float) $payment->amount : null,
             'pending_amount' => (float) $purchase->due_amount,
             'reference' => $payment->reference,
             'cheque_no' => $payment->cheque_no,
@@ -172,6 +173,7 @@ new #[Title('Supplier Transactions')] class extends Component
                 'status' => $payment->cheque_status ?: __('paid'),
                 'credit' => 0.00,
                 'debit' => (float) ($payment->supplier_deduction_amount ?? $payment->amount),
+                'cheque_amount' => $payment->payment_method === 'cheque' ? (float) $payment->amount : null,
                 'pending_amount' => null,
                 'reference' => $payment->reference,
                 'cheque_no' => $payment->cheque_no,
@@ -439,7 +441,7 @@ new #[Title('Supplier Transactions')] class extends Component
                                 <th class="px-4 py-3">{{ __('Method') }}</th>
                                 <th class="px-4 py-3">{{ __('Status') }}</th>
                                 <th class="px-4 py-3 text-right">{{ __('Invoice') }}</th>
-                                <th class="px-4 py-3 text-right">{{ __('Paid') }}</th>
+                                <th class="px-4 py-3 text-right">{{ __('Payment / Cheque Amount') }}</th>
                                 <th class="px-4 py-3 text-right">{{ __('Pending') }}</th>
                             </tr>
                         </thead>
@@ -478,7 +480,13 @@ new #[Title('Supplier Transactions')] class extends Component
                                         ])>{{ str((string) $row['status'])->replace('_', ' ')->headline() }}</span>
                                     </td>
                                     <td class="px-4 py-3 text-right font-black text-rose-600">Rs {{ number_format((float) $row['credit'], 2) }}</td>
-                                    <td class="px-4 py-3 text-right font-black text-emerald-600">Rs {{ number_format((float) $row['debit'], 2) }}</td>
+                                    <td class="px-4 py-3 text-right font-black text-emerald-600">
+                                        @if (($row['cheque_amount'] ?? null) !== null)
+                                            <x-cheque-payment-amount :amount="$row['cheque_amount']" :status="$row['cheque_status']" />
+                                        @else
+                                            Rs {{ number_format((float) $row['debit'], 2) }}
+                                        @endif
+                                    </td>
                                     <td class="px-4 py-3 text-right font-black text-amber-600">
                                         @if (($row['pending_amount'] ?? null) !== null)
                                             Rs {{ number_format((float) $row['pending_amount'], 2) }}
@@ -518,7 +526,9 @@ new #[Title('Supplier Transactions')] class extends Component
                                     <span class="text-sm font-bold text-zinc-700">{{ $row['invoice_no'] }}</span>
                                 @endif
                                 <div class="text-right">
-                                    @if ((float) $row['credit'] > 0)
+                                    @if (($row['cheque_amount'] ?? null) !== null)
+                                        <x-cheque-payment-amount :amount="$row['cheque_amount']" :status="$row['cheque_status']" />
+                                    @elseif ((float) $row['credit'] > 0)
                                         <p class="text-sm font-black text-rose-600">Rs {{ number_format((float) $row['credit'], 2) }}</p>
                                     @else
                                         <p class="text-sm font-black text-emerald-600">Rs {{ number_format((float) $row['debit'], 2) }}</p>

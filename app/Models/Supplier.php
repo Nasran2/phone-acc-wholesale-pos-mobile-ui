@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 
 #[Fillable(['name', 'phone', 'email', 'address', 'company_name', 'opening_balance', 'due_balance'])]
 class Supplier extends Model
@@ -48,7 +49,24 @@ class Supplier extends Model
         $query->withSum([
             'payments as pending_account_cheque_hold' => fn (Builder $payments) => $payments->pendingCheque(),
             'purchasePayments as pending_purchase_cheque_hold' => fn (Builder $payments) => $payments->pendingCheque(),
-        ], 'amount');
+        ], 'amount')->withSum([
+            'payments as pending_account_cheque_deduction' => fn (Builder $payments) => $payments->pendingCheque(),
+        ], DB::raw('COALESCE(supplier_deduction_amount, amount)'));
+    }
+
+    /** @return array{total_due: float, pending: float, due_after_pending: float} */
+    public function payableSummary(): array
+    {
+        $totalDue = round(max(0, (float) $this->due_balance
+            + (float) $this->pending_account_cheque_deduction
+            + (float) $this->pending_purchase_cheque_hold), 2);
+        $pending = $this->pending_cheque_hold_amount;
+
+        return [
+            'total_due' => $totalDue,
+            'pending' => $pending,
+            'due_after_pending' => round(max(0, $totalDue - $pending), 2),
+        ];
     }
 
     protected function pendingChequeHoldAmount(): Attribute
