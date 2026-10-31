@@ -7,6 +7,7 @@ use App\Models\Sale;
 use App\Models\SaleReturn;
 use App\Models\Setting;
 use App\Services\ActivityLogger;
+use App\Services\ChequePaymentService;
 use App\Services\TextItSmsService;
 use Flux\Flux;
 use Livewire\Attributes\Computed;
@@ -132,6 +133,19 @@ new #[Title('Manage Customers')] class extends Component
         $this->returnDetailOpen = false;
         $this->ledgerOrdersPage = 1;
         $this->ledgerPaymentsPage = 1;
+    }
+
+    public function deletePayment(int $paymentId, ChequePaymentService $service): void
+    {
+        abort_unless(auth()->user()?->hasPermission('view_accounting'), 403);
+        abort_unless($this->selectedCustomerId, 404);
+        $payment = Payment::query()->find($paymentId);
+        if ($payment) {
+            $service->deleteCustomerPayment($payment, $this->selectedCustomerId);
+        }
+        $this->resetValidation('cheque');
+        unset($this->selectedCustomer, $this->selectedCustomerLedger, $this->customers, $this->totalDueBalance, $this->customersWithDue);
+        Flux::toast(variant: 'success', text: __('Payment deleted and its balance effects reversed.'));
     }
 
     public function closeLedger(): void
@@ -765,6 +779,7 @@ new #[Title('Manage Customers')] class extends Component
                                 <h5 class="text-xs font-black uppercase tracking-wider text-zinc-500">{{ __('Payments') }}</h5>
                                 <span class="text-[11px] font-semibold text-zinc-400">{{ $paymentsPage }} / {{ $paymentsTotalPages }}</span>
                             </div>
+                            <flux:error name="cheque" />
 
                             @forelse ($ledgerPaymentsPageRows as $row)
                                 <div class="rounded-2xl border border-zinc-100 p-4 transition hover:bg-zinc-50/50" wire:key="customer-ledger-payment-{{ $row['id'] }}">
@@ -822,6 +837,14 @@ new #[Title('Manage Customers')] class extends Component
                                         <div class="shrink-0 text-left sm:text-right">
                                             <span class="text-sm font-bold text-emerald-600">- Rs {{ number_format($row['credit'], 2) }}</span>
                                             <p class="mt-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">{{ $invoiceStatus ? strtoupper((string) $invoiceStatus) : $row['payment_status'] }}</p>
+                                            @if (! empty($row['payment_id']) && auth()->user()?->hasPermission('view_accounting'))
+                                                <flux:button type="button" variant="ghost" size="sm" icon="trash" class="mt-2 text-rose-600"
+                                                    wire:click="deletePayment({{ $row['payment_id'] }})"
+                                                    wire:confirm="{{ __('Delete this payment and restore its invoice and customer balance? This removes only the selected payment.') }}"
+                                                    wire:loading.attr="disabled" wire:target="deletePayment">
+                                                    {{ __('Delete Payment') }}
+                                                </flux:button>
+                                            @endif
                                         </div>
                                     </div>
                                 </div>

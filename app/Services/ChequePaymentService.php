@@ -20,7 +20,17 @@ class ChequePaymentService
 
     public function delete(Payment $payment): void
     {
-        DB::transaction(function () use ($payment): void {
+        $this->deletePayment($payment);
+    }
+
+    public function deleteCustomerPayment(Payment $payment, int $customerId): void
+    {
+        $this->deletePayment($payment, $customerId);
+    }
+
+    private function deletePayment(Payment $payment, ?int $customerId = null): void
+    {
+        DB::transaction(function () use ($payment, $customerId): void {
             $sourceId = Payment::query()->whereKey($payment->id)->value('source_payment_id');
             if ($sourceId) {
                 Payment::query()->lockForUpdate()->findOrFail($sourceId);
@@ -29,8 +39,13 @@ class ChequePaymentService
             if (! $payment) {
                 return;
             }
-            if ($payment->payment_method !== 'cheque' || ! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true) || (float) $payment->amount <= 0) {
-                throw ValidationException::withMessages(['cheque' => __('Please select a valid cheque payment to delete.')]);
+            $isCheque = $payment->payment_method === 'cheque';
+            if ((! $isCheque && ($customerId === null || ! in_array($payment->payment_method, ['cash', 'card', 'bank_transfer', 'qr'], true)))
+                || ($isCheque && ! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true))
+                || (float) $payment->amount <= 0) {
+                throw ValidationException::withMessages(['cheque' => $customerId === null
+                    ? __('Please select a valid cheque payment to delete.')
+                    : __('Please select a valid customer payment to delete.')]);
             }
             if ($payment->issuedPayments()->orderBy('id')->lockForUpdate()->get(['id'])->isNotEmpty()) {
                 throw ValidationException::withMessages(['cheque' => __('This customer cheque has been issued to a supplier. Delete its supplier payment first, then delete the customer receipt if needed.')]);
@@ -45,6 +60,10 @@ class ChequePaymentService
             };
             $ownerQuery = in_array($ownerClass, [Customer::class, Supplier::class], true) ? $ownerClass::withTrashed() : $ownerClass::query();
             $owner = $ownerQuery->lockForUpdate()->findOrFail($payment->paymentable_id);
+            if ($customerId !== null) {
+                abort_unless(($owner instanceof Customer && $owner->id === $customerId)
+                    || ($owner instanceof Sale && $owner->customer_id === $customerId), 404);
+            }
             $customer = null;
             $supplier = null;
             if ($owner instanceof Sale && $owner->customer_id) {
@@ -53,8 +72,8 @@ class ChequePaymentService
                 $supplier = Supplier::withTrashed()->lockForUpdate()->findOrFail($owner->supplier_id);
             }
 
-            if (($owner instanceof Sale || $owner instanceof Purchase) && $payment->cheque_status === 'passed') {
-                $this->removePassedInvoicePayment($owner, $payment);
+            if (($owner instanceof Sale || $owner instanceof Purchase) && (! $isCheque || $payment->cheque_status === 'passed')) {
+                $this->removeCapturedInvoicePayment($owner, $payment);
             }
             $payment->delete();
 
@@ -62,7 +81,7 @@ class ChequePaymentService
                 $this->syncSaleStatus($owner, $customer);
             } elseif ($owner instanceof Purchase) {
                 $this->syncPurchaseStatus($owner, $supplier);
-            } elseif ($owner instanceof Customer && $payment->cheque_status !== 'returned') {
+            } elseif ($owner instanceof Customer && (! $isCheque || $payment->cheque_status !== 'returned')) {
                 $owner->increment('due_balance', (float) $payment->amount);
             } elseif ($owner instanceof Supplier) {
                 $deduction = $payment->supplier_deduction_amount !== null
@@ -73,15 +92,15 @@ class ChequePaymentService
                 }
             }
 
-            ActivityLogger::log('cheque_deleted', __('Deleted cheque payment #:id (:number, :status, Rs :amount) for :type #:owner. Payment and hold effects reversed.', [
+            ActivityLogger::log($isCheque ? 'cheque_deleted' : 'customer_payment_deleted', __('Deleted payment #:id (:number, :status, Rs :amount) for :type #:owner. Payment and hold effects reversed.', [
                 'id' => $payment->id, 'number' => $payment->cheque_no ?: $payment->reference,
-                'status' => $payment->cheque_status, 'amount' => $payment->amount,
+                'status' => $isCheque ? $payment->cheque_status : $payment->payment_method, 'amount' => $payment->amount,
                 'type' => class_basename($owner), 'owner' => $owner->id,
             ]));
         }, 3);
     }
 
-    private function removePassedInvoicePayment(Sale|Purchase $invoice, Payment $payment): void
+    private function removeCapturedInvoicePayment(Sale|Purchase $invoice, Payment $payment): void
     {
         $remainingCapturedAmount = (float) $invoice->payments()->whereKeyNot($payment->id)
             ->where(fn ($query) => $query->where('payment_method', '!=', 'cheque')->orWhere('cheque_status', 'passed'))
@@ -614,7 +633,7 @@ class ChequePaymentService
         $customer ??= $sale->customer;
         if ($dueDelta !== 0.0 && $customer) {
             $customer->update([
-                'due_balance' => round(max(0, (float) $customer->due_balance + $dueDelta), 2),
+                'due_balance' => round((float) $customer->due_balance + $dueDelta, 2),
             ]);
         }
     }

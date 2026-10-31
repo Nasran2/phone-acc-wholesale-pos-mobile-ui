@@ -1213,6 +1213,18 @@ new #[Title('POS Terminal')] class extends Component
     }
 
     #[Computed]
+    public function customerAdvanceCredit(): float
+    {
+        return round(max(0, -(float) ($this->selectedCustomer?->due_balance ?? 0)), 2);
+    }
+
+    #[Computed]
+    public function checkoutOverpayment(): float
+    {
+        return round(max(0, $this->paymentRowsTotalAmount - $this->cartTotal), 2);
+    }
+
+    #[Computed]
     public function paymentRowsTotalAmount()
     {
         return $this->paymentRowsTotal($this->normalisedPaymentRows());
@@ -1592,11 +1604,11 @@ new #[Title('POS Terminal')] class extends Component
         </div>
 
         <div class="mt-2 flex items-center justify-between gap-3 rounded-2xl bg-zinc-50 px-3 py-2 text-xs">
-            <span class="font-bold text-zinc-500">{{ __('Previous Due') }}</span>
+            <span class="font-bold text-zinc-500">{{ $this->customerAdvanceCredit > 0 ? __('Available Advance Credit') : __('Previous Due') }}</span>
             <span @class([ 'font-black' , 'text-rose-600'=> (float) ($this->selectedCustomer?->due_balance ?? 0) > 0,
                 'text-emerald-600' => (float) ($this->selectedCustomer?->due_balance ?? 0) <= 0,
                     ])>
-                    Rs {{ number_format((float) ($this->selectedCustomer?->due_balance ?? 0), 2) }}
+                    Rs {{ number_format(abs((float) ($this->selectedCustomer?->due_balance ?? 0)), 2) }}
             </span>
         </div>
     </div>
@@ -1662,11 +1674,11 @@ new #[Title('POS Terminal')] class extends Component
                 </div>
 
                 <div class="mt-2 flex items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 text-xs">
-                    <span class="font-bold text-zinc-500">{{ __('Previous Due') }}</span>
+                    <span class="font-bold text-zinc-500">{{ $this->customerAdvanceCredit > 0 ? __('Available Advance Credit') : __('Previous Due') }}</span>
                     <span @class([ 'font-black' , 'text-rose-600'=> (float) ($this->selectedCustomer?->due_balance ?? 0) > 0,
                         'text-emerald-600' => (float) ($this->selectedCustomer?->due_balance ?? 0) <= 0,
                             ])>
-                            Rs {{ number_format((float) ($this->selectedCustomer?->due_balance ?? 0), 2) }}
+                            Rs {{ number_format(abs((float) ($this->selectedCustomer?->due_balance ?? 0)), 2) }}
                     </span>
                 </div>
             </div>
@@ -1846,11 +1858,11 @@ new #[Title('POS Terminal')] class extends Component
                 </div>
 
                 <div class="mt-2 flex items-center justify-between gap-3 rounded-2xl bg-zinc-50 px-3 py-2 text-xs">
-                    <span class="font-bold text-zinc-500">{{ __('Previous Due') }}</span>
+                    <span class="font-bold text-zinc-500">{{ $this->customerAdvanceCredit > 0 ? __('Available Advance Credit') : __('Previous Due') }}</span>
                     <span @class([ 'font-black' , 'text-rose-600'=> (float) ($this->selectedCustomer?->due_balance ?? 0) > 0,
                         'text-emerald-600' => (float) ($this->selectedCustomer?->due_balance ?? 0) <= 0,
                             ])>
-                            Rs {{ number_format((float) ($this->selectedCustomer?->due_balance ?? 0), 2) }}
+                            Rs {{ number_format(abs((float) ($this->selectedCustomer?->due_balance ?? 0)), 2) }}
                     </span>
                 </div>
             </div>
@@ -2364,10 +2376,23 @@ new #[Title('POS Terminal')] class extends Component
                             <span class="font-extrabold text-amber-700">Rs {{ number_format($this->checkoutHoldPreview, 2) }}</span>
                         </div>
                         <div class="flex justify-between rounded-2xl border border-zinc-100 bg-zinc-50 p-4 sm:flex-col sm:gap-1">
-                            <span class="font-semibold text-zinc-500">{{ __('Remaining Customer Due') }}</span>
+                            <span class="font-semibold text-zinc-500">{{ __('This Bill Due') }}</span>
                             <span class="font-extrabold text-rose-600">Rs {{ number_format($this->checkoutDuePreview, 2) }}</span>
                         </div>
                     </div>
+
+                    @if ($this->customerAdvanceCredit > 0)
+                        <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800" role="status">
+                            <p class="font-bold">{{ __('Available Advance Credit') }}: Rs {{ number_format($this->customerAdvanceCredit, 2) }}</p>
+                            <p class="mt-1 text-xs">{{ __('Existing credit on this customer account. It is not an additional cash payment for this bill.') }}</p>
+                        </div>
+                    @endif
+                    @if ($this->checkoutOverpayment > 0)
+                        <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800" role="alert">
+                            <p class="font-bold">{{ __('Excess Payment') }}: Rs {{ number_format($this->checkoutOverpayment, 2) }}</p>
+                            <p class="mt-1 text-xs">{{ __('Payment exceeds this bill total. Reduce the payment before saving; this excess has not been recorded as advance credit.') }}</p>
+                        </div>
+                    @endif
 
                     <flux:textarea wire:model="notes" :label="__('Internal Invoice Notes')" rows="2" />
                 </div>
