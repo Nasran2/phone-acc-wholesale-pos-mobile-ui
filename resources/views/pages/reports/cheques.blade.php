@@ -410,7 +410,7 @@ new #[Title('Cheque Report')] class extends Component
             @if ($assignChequeStatus === 'passed')
                 <flux:text>{{ __('This cheque has passed. Saving reduces the selected supplier’s due. When changing supplier, the previous deduction is restored first.') }}</flux:text>
             @else
-                <flux:text>{{ __('Pending and returned cheques do not reduce supplier due. The amount is deducted only when the cheque is marked Passed.') }}</flux:text>
+                <flux:text>{{ __('Assigning a pending cheque moves its amount from supplier due to Cheque Hold. Passing it clears the hold without deducting again. A returned cheque restores the amount to due.') }}</flux:text>
             @endif
             <div class="flex justify-end gap-2">
                 <flux:modal.close><flux:button type="button" variant="ghost">{{ __('Cancel') }}</flux:button></flux:modal.close>

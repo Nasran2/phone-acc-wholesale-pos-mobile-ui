@@ -26,9 +26,6 @@ class ChequePaymentService
             if ($payment->payment_method !== 'cheque' || ! ($owner instanceof Sale || $owner instanceof Customer || $owner instanceof Supplier)) {
                 throw ValidationException::withMessages(['assignedSupplierId' => __('Only customer cheques and supplier account cheques can be assigned here. Invoice cheques belong to their purchase supplier.')]);
             }
-            if ($owner instanceof Supplier && $owner->id === $supplierId) {
-                return $payment;
-            }
             if (! in_array($payment->cheque_status, ['pending', 'passed', 'returned'], true) || (float) $payment->amount <= 0) {
                 throw ValidationException::withMessages(['assignedSupplierId' => __('This cheque has an invalid status or amount.')]);
             }
@@ -42,7 +39,12 @@ class ChequePaymentService
             if (! $newSupplier || $newSupplier->trashed()) {
                 throw ValidationException::withMessages(['assignedSupplierId' => __('Please choose an active supplier.')]);
             }
-            $deduction = $payment->cheque_status === 'passed' ? (float) $payment->amount : 0.0;
+            if ($owner instanceof Supplier && $owner->id === $supplierId) {
+                $this->syncAssignedSupplierDeduction($payment, $payment->cheque_status, 'assignedSupplierId');
+
+                return $payment->refresh();
+            }
+            $deduction = in_array($payment->cheque_status, ['pending', 'passed'], true) ? (float) $payment->amount : 0.0;
             if ($deduction > 0 && $deduction > (float) $newSupplier->due_balance) {
                 throw ValidationException::withMessages(['assignedSupplierId' => __('The cheque amount exceeds this supplier’s outstanding due.')]);
             }
@@ -63,7 +65,7 @@ class ChequePaymentService
                     'cheque_type' => 'party', 'source_payment_id' => $sourcePayment->id,
                     'party_customer_id' => $owner instanceof Customer ? $owner->id : $owner->customer_id,
                     'supplier_deduction_amount' => $deduction,
-                    'notes' => __('Customer cheque assigned to supplier; supplier due is reduced only when passed.'),
+                    'notes' => __('Customer cheque assigned to supplier; pending amount is on hold until cleared.'),
                 ]);
             }
             if ($deduction > 0) {
@@ -380,16 +382,16 @@ class ChequePaymentService
         return $payment;
     }
 
-    private function syncAssignedSupplierDeduction(Payment $payment, string $status): void
+    private function syncAssignedSupplierDeduction(Payment $payment, string $status, string $errorKey = 'cheque'): void
     {
         if ($payment->supplier_deduction_amount === null || ! $payment->paymentable instanceof Supplier) {
             return;
         }
         $supplier = Supplier::withTrashed()->lockForUpdate()->findOrFail($payment->paymentable_id);
-        $deduction = $status === 'passed' ? (float) $payment->amount : 0.0;
+        $deduction = in_array($status, ['pending', 'passed'], true) ? (float) $payment->amount : 0.0;
         $difference = round($deduction - (float) $payment->supplier_deduction_amount, 2);
         if ($difference > (float) $supplier->due_balance && $difference > 0) {
-            throw ValidationException::withMessages(['cheque' => __('The cheque amount exceeds the supplier’s outstanding due. Change the supplier or correct their balance before passing it.')]);
+            throw ValidationException::withMessages([$errorKey => __('The cheque amount exceeds the supplier’s outstanding due. Change the supplier or correct their balance before applying it.')]);
         }
         if ($difference !== 0.0) {
             $supplier->decrement('due_balance', $difference);

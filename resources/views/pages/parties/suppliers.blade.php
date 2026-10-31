@@ -265,6 +265,7 @@ new #[Title('Manage Suppliers')] class extends Component
     public function suppliers()
     {
         return Supplier::query()
+            ->withPendingChequeHold()
             ->where(function ($query) {
                 $query->where('name', 'like', '%' . $this->search . '%')
                       ->orWhere('company_name', 'like', '%' . $this->search . '%');
@@ -276,7 +277,7 @@ new #[Title('Manage Suppliers')] class extends Component
     #[Computed]
     public function selectedSupplier()
     {
-        return $this->selectedSupplierId ? Supplier::query()->findOrFail($this->selectedSupplierId) : null;
+        return $this->selectedSupplierId ? Supplier::query()->withPendingChequeHold()->findOrFail($this->selectedSupplierId) : null;
     }
 
     #[Computed]
@@ -508,6 +509,11 @@ new #[Title('Manage Suppliers')] class extends Component
                                 <span class="text-sm font-bold {{ $s->due_balance > 0 ? 'text-rose-600' : 'text-emerald-600' }}">
                                     Rs {{ number_format($s->due_balance, 2) }}
                                 </span>
+                                @if ($s->pending_cheque_hold_amount > 0)
+                                    <span class="mt-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                                        {{ __('Cheque Hold') }}: Rs {{ number_format($s->pending_cheque_hold_amount, 2) }}
+                                    </span>
+                                @endif
                             </div>
 
                             <div class="flex items-center gap-1">
@@ -593,6 +599,10 @@ new #[Title('Manage Suppliers')] class extends Component
                         <span class="text-lg font-semibold text-zinc-600">
                             Rs {{ number_format($this->selectedSupplier?->opening_balance ?? 0, 2) }}
                         </span>
+                    </div>
+                    <div class="col-span-2 rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30">
+                        <span class="block text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400">{{ __('Cheque Hold') }}</span>
+                        <span class="text-lg font-bold text-amber-700 dark:text-amber-400">Rs {{ number_format($this->selectedSupplier?->pending_cheque_hold_amount ?? 0, 2) }}</span>
                     </div>
                 </div>
 
